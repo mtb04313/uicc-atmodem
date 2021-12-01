@@ -71,20 +71,6 @@ extern "C" {
 #define INTER_WORD_READ_TIMEOUT_MSEC  3000
 #define MAX_AT_RESP_LEN               256
 
-typedef struct {
-    char *portName_p;   /* serial port name */
-    char *modelName_p;  /* modem model */
-    char *imei_p;       /* modem IMEI */
-} Modem_Info_t;
-
-
-typedef struct {
-    size_t numModems;
-    Modem_Info_t *modems;
-} Modem_List_t;
-
-typedef void* Modem_Handle_t;
-
 typedef bool (*cb_modem_data_read)(void *buffer, size_t size, void *context);
 
 typedef struct {
