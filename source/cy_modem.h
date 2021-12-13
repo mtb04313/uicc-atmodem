@@ -85,9 +85,9 @@ bool cy_modem_deinit(void);
 
 cy_modem_t * cy_modem_new(bool connect_ppp);
 
-void cy_modem_delete(cy_modem_t *modem_p);
+void cy_modem_delete(cy_modem_t *modem_p, bool power_off_modem);
 
-bool cy_modem_powerup( cy_modem_t *modem_p);
+bool cy_modem_powerup( cy_modem_t *modem_p, bool connect_ppp);
 
 bool cy_modem_powerdown( cy_modem_t *modem_p);
 

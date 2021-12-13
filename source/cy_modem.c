@@ -473,14 +473,16 @@ cy_modem_t *cy_modem_new(bool connect_ppp)
         return modem_p;
     } while (false);
 
-    cy_modem_delete(modem_p);
+    cy_modem_delete(modem_p, true);
     return NULL;
 }
 
-void cy_modem_delete(cy_modem_t *modem_p)
+void cy_modem_delete(cy_modem_t *modem_p, bool power_off_modem)
 {
     if (modem_p != NULL) {
-        cy_modem_powerdown(modem_p);
+        if (power_off_modem) {
+            cy_modem_powerdown(modem_p);
+        }
 
         Modem_DeleteReadCallback(modem_p->handle);
         Modem_Close(modem_p->handle);
@@ -510,169 +512,172 @@ bool cy_modem_deinit(void)
     return true;
 }
 
-bool cy_modem_powerup(cy_modem_t *modem_p)
+bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
 {
     do {
-        if (Modem_IsFlagFirstRead(modem_p->handle)) {
-            CY_LOGD(TAG, "First Power On");
-            //s_cleanPowerOn = false;
+        if (connect_ppp) {
+            if (Modem_IsFlagFirstRead(modem_p->handle)) {
+                CY_LOGD(TAG, "First Power On");
+                //s_cleanPowerOn = false;
 
 #if (PPP_MODEM_POWER_METHOD == PPP_SIMPLE_SWITCH_METHOD)
-            // in case the modem is already running PPP, stop it first
-            CY_LOGD(TAG, "Stop PPP");
-            modem_stop_ppp(modem_p);
+                // in case the modem is already running PPP, stop it first
+                CY_LOGD(TAG, "Stop PPP");
+                modem_stop_ppp(modem_p);
 
-            // then turn off the modem
-            CY_LOGD(TAG, "Power off modem");
-            cyhal_gpio_write(MODEM_POWER_KEY, MODEM_POWER_OFF);
-            cy_rtos_delay_milliseconds(POWER_OFF_PULSE_WIDTH_MSEC);
+                // then turn off the modem
+                CY_LOGD(TAG, "Power off modem");
+                cyhal_gpio_write(MODEM_POWER_KEY, MODEM_POWER_OFF);
+                cy_rtos_delay_milliseconds(POWER_OFF_PULSE_WIDTH_MSEC);
 
 #elif (PPP_MODEM_POWER_METHOD == PPP_POWER_STEP_METHOD)
-            // in case the modem is already running PPP, stop it first
-            CY_LOGD(TAG, "Stop PPP");
-            modem_stop_ppp(modem_p);
+                // in case the modem is already running PPP, stop it first
+                CY_LOGD(TAG, "Stop PPP");
+                modem_stop_ppp(modem_p);
 
-            // then turn off the modem
-            int i;
-            for (i = 0; i < 2; i++) {
-                CY_LOGD(TAG, "Power step %d", i);
-                cy_modem_powerdown(modem_p);
-                do_modem_power_on_pulse();
-            }
+                // then turn off the modem
+                int i;
+                for (i = 0; i < 2; i++) {
+                    CY_LOGD(TAG, "Power step %d", i);
+                    cy_modem_powerdown(modem_p);
+                    do_modem_power_on_pulse();
+                }
 
-            cy_rtos_delay_milliseconds(FIRST_POWER_ON_DELAY_1_MSEC);
+                cy_rtos_delay_milliseconds(FIRST_POWER_ON_DELAY_1_MSEC);
 
-            cy_rtos_delay_milliseconds(FIRST_POWER_ON_DELAY_2_MSEC);
+                cy_rtos_delay_milliseconds(FIRST_POWER_ON_DELAY_2_MSEC);
 #endif
+            }
         }
-
 
         if (!modem_power_on(modem_p)) {
             CY_LOGE(TAG, "%s [%d]: modem_power_on failed", __FUNCTION__, __LINE__);
             break;
         }
 
-        if (!modem_set_max_baud_rate(modem_p, MAX_MODEM_BAUD_RATE)) {
-            CY_LOGE(TAG, "%s [%d]: modem_set_max_baud_rate failed", __FUNCTION__, __LINE__);
-            break;
-        }
-
-        // ATZ
-        if (Modem_SendATCommand(modem_p->handle,
-                                AT_CMD_RESTORE_USER_SETTINGS,
-                                modem_p->line_buffer_p,
-                                modem_p->line_buffer_size)) {
-            if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
-                CY_LOGE(TAG, "%s [%d]: Error reading: ATZ", __FUNCTION__, __LINE__);
+        if (connect_ppp) {
+            if (!modem_set_max_baud_rate(modem_p, MAX_MODEM_BAUD_RATE)) {
+                CY_LOGE(TAG, "%s [%d]: modem_set_max_baud_rate failed", __FUNCTION__, __LINE__);
                 break;
-            } else {
-                CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
             }
-        }
 
-        // ATQ0 V1 E1 S0=0 &C1 &D2 +FCLASS=0
-        if (Modem_SendATCommand(modem_p->handle,
-                                AT_CMD_DEFINE_USER_SETTINGS,
-                                modem_p->line_buffer_p,
-                                modem_p->line_buffer_size)) {
-            if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
-                CY_LOGE(TAG, "%s [%d]: Error reading: ATQ0 V1 E1 S0=0 &C1 &D2 +FCLASS=0", __FUNCTION__, __LINE__);
-                break;
-            } else {
-                CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+            // ATZ
+            if (Modem_SendATCommand(modem_p->handle,
+                                    AT_CMD_RESTORE_USER_SETTINGS,
+                                    modem_p->line_buffer_p,
+                                    modem_p->line_buffer_size)) {
+                if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                    CY_LOGE(TAG, "%s [%d]: Error reading: ATZ", __FUNCTION__, __LINE__);
+                    break;
+                } else {
+                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                }
             }
-        }
 
-        // ATE0
-        if (Modem_SendATCommand(modem_p->handle,
-                                AT_CMD_ECHO_OFF,
-                                modem_p->line_buffer_p,
-                                modem_p->line_buffer_size)) {
-            if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
-                CY_LOGE(TAG, "%s [%d]: Error reading: ATE0", __FUNCTION__, __LINE__);
-                break;
-            } else {
-                CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+            // ATQ0 V1 E1 S0=0 &C1 &D2 +FCLASS=0
+            if (Modem_SendATCommand(modem_p->handle,
+                                    AT_CMD_DEFINE_USER_SETTINGS,
+                                    modem_p->line_buffer_p,
+                                    modem_p->line_buffer_size)) {
+                if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                    CY_LOGE(TAG, "%s [%d]: Error reading: ATQ0 V1 E1 S0=0 &C1 &D2 +FCLASS=0", __FUNCTION__, __LINE__);
+                    break;
+                } else {
+                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                }
             }
-        }
 
-        // IMSI number
-        if (Modem_SendATCommand(modem_p->handle,
-                                AT_CMD_IMSI,
-                                modem_p->line_buffer_p,
-                                modem_p->line_buffer_size)) {
-            if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
-                CY_LOGE(TAG, "%s [%d]: Error reading: IMSI", __FUNCTION__, __LINE__);
-                break;
-            } else {
-                CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+            // ATE0
+            if (Modem_SendATCommand(modem_p->handle,
+                                    AT_CMD_ECHO_OFF,
+                                    modem_p->line_buffer_p,
+                                    modem_p->line_buffer_size)) {
+                if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                    CY_LOGE(TAG, "%s [%d]: Error reading: ATE0", __FUNCTION__, __LINE__);
+                    break;
+                } else {
+                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                }
             }
-        }
 
-        // set flow control: none
-        if (Modem_SendATCommand(modem_p->handle,
-                                AT_CMD_SET_FLOW_CONTROL,
-                                modem_p->line_buffer_p,
-                                modem_p->line_buffer_size)) {
-            if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
-                CY_LOGE(TAG, "%s [%d]: Error: flow control", __FUNCTION__, __LINE__);
-                break;
-            } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+            // IMSI number
+            if (Modem_SendATCommand(modem_p->handle,
+                                    AT_CMD_IMSI,
+                                    modem_p->line_buffer_p,
+                                    modem_p->line_buffer_size)) {
+                if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                    CY_LOGE(TAG, "%s [%d]: Error reading: IMSI", __FUNCTION__, __LINE__);
+                    break;
+                } else {
+                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                }
             }
-        }
 
-        // store profile
-        if (Modem_SendATCommand(modem_p->handle,
-                                AT_CMD_SAVE_USER_SETTINGS,
-                                modem_p->line_buffer_p,
-                                modem_p->line_buffer_size)) {
-            if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
-                CY_LOGE(TAG, "%s [%d]: Error: store profile", __FUNCTION__, __LINE__);
-                break;
-            } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+            // set flow control: none
+            if (Modem_SendATCommand(modem_p->handle,
+                                    AT_CMD_SET_FLOW_CONTROL,
+                                    modem_p->line_buffer_p,
+                                    modem_p->line_buffer_size)) {
+                if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                    CY_LOGE(TAG, "%s [%d]: Error: flow control", __FUNCTION__, __LINE__);
+                    break;
+                } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                }
             }
-        }
 
-        // query SIM card status
-        if (Modem_SendATCommand(modem_p->handle,
-                                AT_CMD_QUERY_SIM_CARD_STATUS,
-                                modem_p->line_buffer_p,
-                                modem_p->line_buffer_size)) {
-            if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
-                CY_LOGE(TAG, "%s [%d]: Sim Card error", __FUNCTION__, __LINE__);
-                break;
-            } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+            // store profile
+            if (Modem_SendATCommand(modem_p->handle,
+                                    AT_CMD_SAVE_USER_SETTINGS,
+                                    modem_p->line_buffer_p,
+                                    modem_p->line_buffer_size)) {
+                if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                    CY_LOGE(TAG, "%s [%d]: Error: store profile", __FUNCTION__, __LINE__);
+                    break;
+                } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                }
             }
-        }
+
+            // query SIM card status
+            if (Modem_SendATCommand(modem_p->handle,
+                                    AT_CMD_QUERY_SIM_CARD_STATUS,
+                                    modem_p->line_buffer_p,
+                                    modem_p->line_buffer_size)) {
+                if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                    CY_LOGE(TAG, "%s [%d]: Sim Card error", __FUNCTION__, __LINE__);
+                    break;
+                } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                }
+            }
 
 #ifdef AT_CMD_QUERY_HOTSWAP_LEVEL
-        // query SIM card Hot Swap Level
-        if (Modem_SendATCommand(modem_p->handle,
-                                AT_CMD_QUERY_HOTSWAP_LEVEL,
-                                modem_p->line_buffer_p,
-                                modem_p->line_buffer_size)) {
-            if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+            // query SIM card Hot Swap Level
+            if (Modem_SendATCommand(modem_p->handle,
+                                    AT_CMD_QUERY_HOTSWAP_LEVEL,
+                                    modem_p->line_buffer_p,
+                                    modem_p->line_buffer_size)) {
+                if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                }
             }
-        }
 #endif
 
 #ifdef AT_CMD_QUERY_HOTSWAP_LEVEL
-        // enable SIM card Hot Swap
-        if (Modem_SendATCommand(modem_p->handle,
-                                AT_CMD_SET_HOTSWAP_ON,
-                                modem_p->line_buffer_p,
-                                modem_p->line_buffer_size)) {
-            if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+            // enable SIM card Hot Swap
+            if (Modem_SendATCommand(modem_p->handle,
+                                    AT_CMD_SET_HOTSWAP_ON,
+                                    modem_p->line_buffer_p,
+                                    modem_p->line_buffer_size)) {
+                if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                }
             }
-        }
 #endif
 
-        //cy_modem_update_gps_location(modem_p);
+            //cy_modem_update_gps_location(modem_p);
+        }
 
         return true;
 
