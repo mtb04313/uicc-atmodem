@@ -898,6 +898,29 @@ void Modem_Reset(_in_ Modem_Handle_t handle)
 #endif
 }
 
+static size_t GetATCmdLength(_in_  const char *commandString)
+{
+    /* if the command string is 'echoed' in the response,
+     * we need to skip over it. To do that, we need to know
+     * how many chars are present in the command string,
+     * excluding the chars: ?, \r and \n */
+    size_t nCmdChars = strlen(commandString);
+    ReturnAssert(nCmdChars > 0, 0);
+
+    /* ignore ?, \r or \n at the end of the command string */
+    char *cmdPtr = (char *)&commandString[nCmdChars - 1];
+    while (cmdPtr != commandString) {
+        if ((*cmdPtr == '?') || (*cmdPtr == '\r') || (*cmdPtr == '\n')) {
+            cmdPtr--;
+        }
+        else {
+            break;
+        }
+    }
+    nCmdChars = (size_t)(cmdPtr - commandString) + 1;
+    return nCmdChars;
+}
+
 bool Modem_SendATCommand( _in_  Modem_Handle_t handle,
                           _in_  const char *commandString,
                           _out_ char *responseStr_p,
@@ -905,7 +928,6 @@ bool Modem_SendATCommand( _in_  Modem_Handle_t handle,
 {
     bool retValue;
     size_t nbytes = 0;       /* Number of bytes read */
-    size_t temp;
     char buffer[MAX_AT_RESP_LEN];
 
     DEBUG_PRINT(("%s [%d]: %s\n", __FUNCTION__, __LINE__, commandString));
@@ -913,9 +935,10 @@ bool Modem_SendATCommand( _in_  Modem_Handle_t handle,
     retValue = Modem_WriteCommand(handle,
                                   (const uint8_t*)commandString,
                                   strlen(commandString));
-    //ReturnAssert(retValue, UICC_UNDEFINED_ERROR);
 
     if (retValue) {
+        size_t temp;
+
         /* read characters into response buffer until we get a CR or NL */
         while ((temp = Modem_ReadResponse(handle,
                                           INTER_WORD_READ_TIMEOUT_MSEC,
@@ -935,43 +958,45 @@ bool Modem_SendATCommand( _in_  Modem_Handle_t handle,
             }
         }
 
-        if (strstr(buffer, AT_RSP_OK) != NULL) {
-            char *ptr;
-            char *start;
+        if (nbytes > 0) {
 
-            if ((ptr = strstr(buffer, commandString)) == NULL) {
-                /* look for start of string */
+            if (strstr(buffer, AT_RSP_OK) != NULL) {
+                char *ptr;
+                char *start;
+
+                size_t nCmdLen = GetATCmdLength(commandString);
+
+                /* look for start of response string */
                 ptr = buffer;
-                while (*ptr != '\0') {
-                    if ((*ptr == '\r') || (*ptr == '\n')) {
-                        ptr++;
-                    } else {
-                        break;
-                    }
+
+                if (memcmp(buffer, commandString, nCmdLen) == 0) {
+                    /* command string is 'echoed' in the response, skip over it */
+                    ptr += nCmdLen;
                 }
-                start = ptr;
-            } else {
-                ptr += strlen(commandString);
+
                 start = ptr = left_trim(ptr);
-            }
 
-            /* look for end of string */
-            while (*ptr != '\0') {
-                if ((*ptr == '\r') || (*ptr == '\n')) {
-                    *ptr = '\0';
-                    break;
-                } else {
-                    ptr++;
+                /* look for end of response string */
+                right_trim(ptr);
+
+                DEBUG_PRINT(("%s\n", start));
+
+                /* if caller wants the response */
+                if (responseStr_p != NULL) {
+                    STRNCPY_APPEND_NULL(responseStr_p, start, maxResponseBufSize - 1);
                 }
             }
+            else {
+                DEBUG_PRINT(("%s\n", buffer));
 
-            DEBUG_PRINT(("%s\n", start));
-
-            /* if caller wants the response */
-            if (responseStr_p != NULL) {
-                STRNCPY_APPEND_NULL(responseStr_p, start, maxResponseBufSize - 1);
+                /* if caller wants the response */
+                if (responseStr_p != NULL) {
+                    STRNCPY_APPEND_NULL(responseStr_p, buffer, maxResponseBufSize - 1);
+                }
             }
         }
+
+        return (nbytes > 0);
     }
 
     return retValue;

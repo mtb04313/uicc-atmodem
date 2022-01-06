@@ -86,10 +86,29 @@
 #define FIRST_POWER_ON_DELAY_2_MSEC         18000
 #endif
 
+#define MAX_QUERY_SIM_CARD_STATUS_RETRIES   20
 
-#define GPS_READY_MAX_RETRIES               10
+#define MAX_GPS_READY_RETRIES               10
 #define WAIT_FOR_GPS_READY_MSEC             1000
 #define SWITCH_PPP_TO_CMD_MODE_DELAY_MSEC   500 // was 1000
+
+#define MAX_QUERY_OPERATOR_SELECTION_RETRIES    100
+#define QUERY_OPERATOR_SELECTION_INTERVAL_MSEC  1000
+
+#define MAX_QUERY_NETWORK_REGISTRATION_RETRIES      100
+#define QUERY_NETWORK_REGISTRATION_INTERVAL_MSEC    1000
+
+#define MAX_QUERY_PACKET_DOMAIN_RETRIES     100
+#define QUERY_PACKET_DOMAIN_INTERVAL_MSEC   1000
+#define ATTACH_PACKET_DOMAIN_SERVICE        1
+
+#define MAX_QUERY_SIGNAL_QUALITY_RETRIES    100
+#define QUERY_SIGNAL_QUALITY_INTERVAL_MSEC  1000
+#define SIGNAL_QUALITY_RSSI_UNKNOWN         99
+
+#define QUERY_NETWORK_REGISTRATION_STATUS_REGISTERED_HOME   1
+#define QUERY_NETWORK_REGISTRATION_STATUS_REGISTERED_ROAM   5
+
 
 
 /*-- Local Data -------------------------------------------------*/
@@ -225,6 +244,135 @@ static bool extract_gps_location( const char* input_p,
 }
 #endif
 
+// Warning: line_buffer_p may be altered
+static bool parse_network_registration_response(char *line_buffer_p)
+{
+    char *comma_p;
+    ReturnAssert(line_buffer_p != NULL, false);
+
+    //CY_LOGD(TAG, "%s [%d] %s", __FUNCTION__, __LINE__, line_buffer_p);
+
+    // get the field after the first separator
+    if ((comma_p = strstr(line_buffer_p, ",")) != NULL) {
+        comma_p++;
+
+        char *second_p;
+
+        if ((second_p = strstr(comma_p, ",")) != NULL) {
+            second_p = '\0';
+        }
+
+        int status;
+        status = atoi(comma_p);
+        CY_LOGD(TAG, "status = %d", status);
+
+        if ((status == QUERY_NETWORK_REGISTRATION_STATUS_REGISTERED_HOME) ||
+            (status == QUERY_NETWORK_REGISTRATION_STATUS_REGISTERED_ROAM)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+#if 1
+// Warning: line_buffer_p may be altered
+static bool parse_attach_packet_domain_response(char *line_buffer_p)
+{
+    ReturnAssert(line_buffer_p != NULL, false);
+
+    //CY_LOGD(TAG, "%s [%d] %s", __FUNCTION__, __LINE__, line_buffer_p);
+
+    char *space_p;
+
+    if ((space_p = strstr(line_buffer_p, " ")) != NULL) {
+        char *crlf_p;
+
+        space_p++;
+
+        // get the CR LF after the first space separator
+        if ((crlf_p = strstr(space_p, "\r\n")) != NULL) {
+
+            int value;
+            crlf_p = '\0';
+
+            value = atoi(space_p);
+            CY_LOGD(TAG, "value = %d", value);
+
+            if (value == ATTACH_PACKET_DOMAIN_SERVICE) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+#else
+// Warning: line_buffer_p may be altered
+static bool parse_attach_packet_domain_response(char *line_buffer_p)
+{
+    char *crlf_p;
+    ReturnAssert(line_buffer_p != NULL, false);
+
+    //CY_LOGD(TAG, "%s [%d] %s", __FUNCTION__, __LINE__, line_buffer_p);
+
+    // get the field before the first separator
+    if ((crlf_p = strstr(line_buffer_p, "\r\n")) != NULL) {
+        char *space_p;
+
+        if ((space_p = strstr(line_buffer_p, " ")) != NULL) {
+            space_p++;
+
+            if (space_p < crlf_p) {
+                int value;
+                crlf_p = '\0';
+
+                value = atoi(space_p);
+                CY_LOGD(TAG, "value = %d", value);
+
+                if (value == ATTACH_PACKET_DOMAIN_SERVICE) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    return false;
+}
+#endif
+
+// Warning: line_buffer_p may be altered
+static bool parse_signal_quality_response(char *line_buffer_p)
+{
+    char *comma_p;
+    ReturnAssert(line_buffer_p != NULL, false);
+
+    //CY_LOGD(TAG, "%s [%d] %s", __FUNCTION__, __LINE__, line_buffer_p);
+
+    // get the field before the first separator
+    if ((comma_p = strstr(line_buffer_p, ",")) != NULL) {
+        char *space_p;
+
+        if ((space_p = strstr(line_buffer_p, " ")) != NULL) {
+            space_p++;
+
+            if (space_p < comma_p) {
+                int rssi;
+                comma_p = '\0';
+
+                rssi = atoi(space_p);
+                CY_LOGD(TAG, "rssi = %d", rssi);
+
+                if (rssi < SIGNAL_QUALITY_RSSI_UNKNOWN) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    return false;
+}
 
 static Modem_Handle_t modem_open(void)
 {
@@ -518,9 +666,9 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
         if (connect_ppp) {
             if (Modem_IsFlagFirstRead(modem_p->handle)) {
                 CY_LOGD(TAG, "First Power On");
-                //s_cleanPowerOn = false;
 
 #if (PPP_MODEM_POWER_METHOD == PPP_SIMPLE_SWITCH_METHOD)
+                /*
                 // in case the modem is already running PPP, stop it first
                 CY_LOGD(TAG, "Stop PPP");
                 modem_stop_ppp(modem_p);
@@ -529,7 +677,7 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
                 CY_LOGD(TAG, "Power off modem");
                 cyhal_gpio_write(MODEM_POWER_KEY, MODEM_POWER_OFF);
                 cy_rtos_delay_milliseconds(POWER_OFF_PULSE_WIDTH_MSEC);
-
+                */
 #elif (PPP_MODEM_POWER_METHOD == PPP_POWER_STEP_METHOD)
                 // in case the modem is already running PPP, stop it first
                 CY_LOGD(TAG, "Stop PPP");
@@ -556,38 +704,9 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
         }
 
         if (connect_ppp) {
-            if (!modem_set_max_baud_rate(modem_p, MAX_MODEM_BAUD_RATE)) {
-                CY_LOGE(TAG, "%s [%d]: modem_set_max_baud_rate failed", __FUNCTION__, __LINE__);
-                break;
-            }
+            int i;
 
-            // ATZ
-            if (Modem_SendATCommand(modem_p->handle,
-                                    AT_CMD_RESTORE_USER_SETTINGS,
-                                    modem_p->line_buffer_p,
-                                    modem_p->line_buffer_size)) {
-                if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
-                    CY_LOGE(TAG, "%s [%d]: Error reading: ATZ", __FUNCTION__, __LINE__);
-                    break;
-                } else {
-                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
-                }
-            }
-
-            // ATQ0 V1 E1 S0=0 &C1 &D2 +FCLASS=0
-            if (Modem_SendATCommand(modem_p->handle,
-                                    AT_CMD_DEFINE_USER_SETTINGS,
-                                    modem_p->line_buffer_p,
-                                    modem_p->line_buffer_size)) {
-                if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
-                    CY_LOGE(TAG, "%s [%d]: Error reading: ATQ0 V1 E1 S0=0 &C1 &D2 +FCLASS=0", __FUNCTION__, __LINE__);
-                    break;
-                } else {
-                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
-                }
-            }
-
-            // ATE0
+            // set echo: off
             if (Modem_SendATCommand(modem_p->handle,
                                     AT_CMD_ECHO_OFF,
                                     modem_p->line_buffer_p,
@@ -598,6 +717,165 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
                 } else {
                     CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                 }
+            }
+
+            // set flow control: none
+            if (Modem_SendATCommand(modem_p->handle,
+                                    AT_CMD_SET_FLOW_CONTROL_NONE,
+                                    modem_p->line_buffer_p,
+                                    modem_p->line_buffer_size)) {
+                if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                    CY_LOGE(TAG, "%s [%d]: Error: flow control", __FUNCTION__, __LINE__);
+                    break;
+                } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                }
+            }
+
+            // set baud rate
+            if (!modem_set_max_baud_rate(modem_p, MAX_MODEM_BAUD_RATE)) {
+                CY_LOGE(TAG, "%s [%d]: modem_set_max_baud_rate failed", __FUNCTION__, __LINE__);
+                break;
+            }
+#if 0
+            // save user settings
+            if (Modem_SendATCommand(modem_p->handle,
+                    AT_CMD_SAVE_USER_SETTINGS,
+                                    modem_p->line_buffer_p,
+                                    modem_p->line_buffer_size)) {
+                if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                    CY_LOGE(TAG, "%s [%d]: Error saving settings", __FUNCTION__, __LINE__);
+                    break;
+                } else {
+                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                }
+            }
+#endif
+            // set error msg format: verbose
+            if (Modem_SendATCommand(modem_p->handle,
+                                    AT_CMD_SET_ERROR_MSG_FORMAT_VERBOSE,
+                                    modem_p->line_buffer_p,
+                                    modem_p->line_buffer_size)) {
+                if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                    CY_LOGE(TAG, "%s [%d]: Error: msg format", __FUNCTION__, __LINE__);
+                    break;
+                } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                }
+            }
+
+            // set TA response format: verbose
+            if (Modem_SendATCommand(modem_p->handle,
+                                    AT_CMD_SET_TA_RESPONSE_FORMAT_VERBOSE,
+                                    modem_p->line_buffer_p,
+                                    modem_p->line_buffer_size)) {
+                if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                    CY_LOGE(TAG, "%s [%d]: Error: TA response format", __FUNCTION__, __LINE__);
+                    break;
+                } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                }
+            }
+
+            // set DTR function mode: ignore
+            if (Modem_SendATCommand(modem_p->handle,
+                                    AT_CMD_SET_DTR_FUNCTION_MODE_IGNORE,
+                                    modem_p->line_buffer_p,
+                                    modem_p->line_buffer_size)) {
+                if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                    CY_LOGE(TAG, "%s [%d]: Error: DTR function mode", __FUNCTION__, __LINE__);
+                    break;
+                } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                }
+            }
+
+            // query baud rate
+            if (Modem_SendATCommand(modem_p->handle,
+                                    AT_CMD_QUERY_BAUD_RATE,
+                                    modem_p->line_buffer_p,
+                                    modem_p->line_buffer_size)) {
+                if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                    CY_LOGE(TAG, "%s [%d]: Error: query baud rate", __FUNCTION__, __LINE__);
+                    break;
+                } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                }
+            }
+
+#if 0
+            // REVISIT:Quectel BG96 code
+            // set QCFG
+            if (Modem_SendATCommand(modem_p->handle,
+                                    AT_CMD_SET_QCFG_BAND,
+                                    modem_p->line_buffer_p,
+                                    modem_p->line_buffer_size)) {
+                if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                    CY_LOGE(TAG, "%s [%d]: Error: QCFG band", __FUNCTION__, __LINE__);
+                    break;
+                } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                }
+            }
+
+            if (Modem_SendATCommand(modem_p->handle,
+                                    AT_CMD_SET_QCFG_IOTOPMODE,
+                                    modem_p->line_buffer_p,
+                                    modem_p->line_buffer_size)) {
+                if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                    CY_LOGE(TAG, "%s [%d]: Error: QCFG iotopmode", __FUNCTION__, __LINE__);
+                    break;
+                } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                }
+            }
+
+            if (Modem_SendATCommand(modem_p->handle,
+                                    AT_CMD_SET_QCFG_NWSCANSEQ,
+                                    modem_p->line_buffer_p,
+                                    modem_p->line_buffer_size)) {
+                if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                    CY_LOGE(TAG, "%s [%d]: Error: QCFG nwscanseq", __FUNCTION__, __LINE__);
+                    break;
+                } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                }
+            }
+
+            if (Modem_SendATCommand(modem_p->handle,
+                                    AT_CMD_SET_QCFG_NWSCANMODE,
+                                    modem_p->line_buffer_p,
+                                    modem_p->line_buffer_size)) {
+                if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                    CY_LOGE(TAG, "%s [%d]: Error: QCFG nwscanmode", __FUNCTION__, __LINE__);
+                    break;
+                } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                }
+            }
+#endif
+
+            // query SIM card status
+            bool simCardError = true;
+
+            for (i = 0; i < MAX_QUERY_SIM_CARD_STATUS_RETRIES; i++) {
+                if (Modem_SendATCommand(modem_p->handle,
+                                        AT_CMD_QUERY_SIM_CARD_STATUS,
+                                        modem_p->line_buffer_p,
+                                        modem_p->line_buffer_size)) {
+                    if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                        CY_LOGE(TAG, "%s [%d]: Sim Card error", __FUNCTION__, __LINE__);
+                    } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                        CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                        simCardError = false;
+                    }
+                    break;
+                }
+            }
+
+            if (simCardError) {
+                CY_LOGE(TAG, "%s [%d]: USIM Card Error", __FUNCTION__, __LINE__);
+                break;
             }
 
             // IMSI number
@@ -613,44 +891,9 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
                 }
             }
 
-            // set flow control: none
-            if (Modem_SendATCommand(modem_p->handle,
-                                    AT_CMD_SET_FLOW_CONTROL,
-                                    modem_p->line_buffer_p,
-                                    modem_p->line_buffer_size)) {
-                if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
-                    CY_LOGE(TAG, "%s [%d]: Error: flow control", __FUNCTION__, __LINE__);
-                    break;
-                } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
-                }
-            }
-
-            // store profile
-            if (Modem_SendATCommand(modem_p->handle,
-                                    AT_CMD_SAVE_USER_SETTINGS,
-                                    modem_p->line_buffer_p,
-                                    modem_p->line_buffer_size)) {
-                if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
-                    CY_LOGE(TAG, "%s [%d]: Error: store profile", __FUNCTION__, __LINE__);
-                    break;
-                } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
-                }
-            }
-
-            // query SIM card status
-            if (Modem_SendATCommand(modem_p->handle,
-                                    AT_CMD_QUERY_SIM_CARD_STATUS,
-                                    modem_p->line_buffer_p,
-                                    modem_p->line_buffer_size)) {
-                if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
-                    CY_LOGE(TAG, "%s [%d]: Sim Card error", __FUNCTION__, __LINE__);
-                    break;
-                } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
-                }
-            }
+            //cy_modem_update_gps_location(modem_p);
+        }
+        else {
 
 #ifdef AT_CMD_QUERY_HOTSWAP_LEVEL
             // query SIM card Hot Swap Level
@@ -675,8 +918,6 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
                 }
             }
 #endif
-
-            //cy_modem_update_gps_location(modem_p);
         }
 
         return true;
@@ -745,7 +986,7 @@ bool cy_modem_update_gps_location(cy_modem_t *modem_p)
     if (result) {
         result = false;
 
-        for (i = 0; i < GPS_READY_MAX_RETRIES; i++) {
+        for (i = 0; i < MAX_GPS_READY_RETRIES; i++) {
             cy_rtos_delay_milliseconds(WAIT_FOR_GPS_READY_MSEC);
 
             // CGPSINFO
@@ -884,14 +1125,16 @@ bool modem_start_ppp(cy_modem_t *modem_p,
 {
     do {
         bool result;
+        int i;
 
-        // query GSM network
+        // modem manufacturer
         if (Modem_SendATCommand(modem_p->handle,
-                                AT_CMD_QUERY_GSM_NETWORK,
+                                AT_CMD_MFG,
                                 modem_p->line_buffer_p,
                                 modem_p->line_buffer_size)) {
+
             if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
-                CY_LOGE(TAG, "%s [%d]: Failed to register to GSM network", __FUNCTION__, __LINE__);
+                CY_LOGE(TAG, "%s [%d]: Error reading: mfg", __FUNCTION__, __LINE__);
                 break;
 
             } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
@@ -899,13 +1142,14 @@ bool modem_start_ppp(cy_modem_t *modem_p,
             }
         }
 
-        // query GPRS network
+        // modem model
         if (Modem_SendATCommand(modem_p->handle,
-                                AT_CMD_QUERY_GPRS_NETWORK,
+                                AT_CMD_MODEL,
                                 modem_p->line_buffer_p,
                                 modem_p->line_buffer_size)) {
+
             if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
-                CY_LOGE(TAG, "%s [%d]: Failed to register to GPRS network", __FUNCTION__, __LINE__);
+                CY_LOGE(TAG, "%s [%d]: Error reading: model", __FUNCTION__, __LINE__);
                 break;
 
             } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
@@ -913,37 +1157,276 @@ bool modem_start_ppp(cy_modem_t *modem_p,
             }
         }
 
-        // operator name
+        // modem IMEI
         if (Modem_SendATCommand(modem_p->handle,
-                                AT_CMD_OPERATOR_SELECTION,
+                                AT_CMD_IMEI,
                                 modem_p->line_buffer_p,
                                 modem_p->line_buffer_size)) {
+
             if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
-                CY_LOGE(TAG, "%s [%d]: Error reading: operator name", __FUNCTION__, __LINE__);
+                CY_LOGE(TAG, "%s [%d]: Error reading: IMEI", __FUNCTION__, __LINE__);
                 break;
 
-            } else {
-                CY_LOGD(TAG, "[%d] %s", __LINE__, modem_p->line_buffer_p);
+            } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+            }
+        }
 
-                // e.g.  +COPS: 0,0,"Singtel Tata",7
-                extract_operator_name(modem_p->line_buffer_p,
-                                      modem_p->operatorName,
-                                      sizeof(modem_p->operatorName));
+        // cellular operator name
+        bool operatorSelectionError = true;
+
+        for (i = 0; i < MAX_QUERY_OPERATOR_SELECTION_RETRIES; i++) {
+            if (Modem_SendATCommand(modem_p->handle,
+                                    AT_CMD_OPERATOR_SELECTION,
+                                    modem_p->line_buffer_p,
+                                    modem_p->line_buffer_size)) {
+
+                if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                    CY_LOGE(TAG, "%s [%d]: Error reading: operator name", __FUNCTION__, __LINE__);
+                    break;
+
+                } else {
+                    CY_LOGD(TAG, "[%d] %s", __LINE__, modem_p->line_buffer_p);
+
+                    if (strstr(modem_p->line_buffer_p, ",") != NULL) {
+                        // e.g.  +COPS: 0,0,"Singtel Tata",7
+                        extract_operator_name(modem_p->line_buffer_p,
+                                              modem_p->operatorName,
+                                              sizeof(modem_p->operatorName));
+
+                        operatorSelectionError = false;
+                        break;
+                    }
+                }
+            }
+
+            cy_rtos_delay_milliseconds(QUERY_OPERATOR_SELECTION_INTERVAL_MSEC);
+        }
+
+        if (operatorSelectionError) {
+            CY_LOGE(TAG, "%s [%d]: Operator Selection Error", __FUNCTION__, __LINE__);
+            break;
+        }
+
+        if (Modem_SendATCommand(modem_p->handle,
+                                AT_CMD_OPERATOR_SELECTION_AUTO_MODE,
+                                modem_p->line_buffer_p,
+                                modem_p->line_buffer_size)) {
+
+            if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                CY_LOGE(TAG, "%s [%d]: Error setting operator selection, auto mode", __FUNCTION__, __LINE__);
+                break;
+
+            } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+            }
+        }
+
+
+        // GSM network
+        if (Modem_SendATCommand(modem_p->handle,
+                                AT_CMD_TEST_GSM_NETWORK,
+                                modem_p->line_buffer_p,
+                                modem_p->line_buffer_size)) {
+
+            if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                // command is supported
+                CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+
+                bool networkRegistrationError;;
+
+                if (Modem_SendATCommand(modem_p->handle,
+                                        AT_CMD_SET_GSM_NETWORK_PRESENTATION,
+                                        modem_p->line_buffer_p,
+                                        modem_p->line_buffer_size)) {
+
+                    if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                        CY_LOGE(TAG, "%s [%d]: Failed to set GSM network register presentation", __FUNCTION__, __LINE__);
+                        break;
+
+                    } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                        CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                    }
+                }
+
+                networkRegistrationError = true;
+
+                for (i = 0; i < MAX_QUERY_NETWORK_REGISTRATION_RETRIES; i++) {
+                    if (Modem_SendATCommand(modem_p->handle,
+                                            AT_CMD_QUERY_GSM_NETWORK,
+                                            modem_p->line_buffer_p,
+                                            modem_p->line_buffer_size)) {
+
+                        if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                            CY_LOGE(TAG, "%s [%d]: Failed to register to GSM network", __FUNCTION__, __LINE__);
+                            break;
+
+                        } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                            CY_LOGD(TAG, "[%d] %s", i, modem_p->line_buffer_p);
+
+                            if (parse_network_registration_response(modem_p->line_buffer_p)) {
+                                networkRegistrationError = false;
+                                break;
+                            }
+
+                            cy_rtos_delay_milliseconds(QUERY_NETWORK_REGISTRATION_INTERVAL_MSEC);
+                        }
+                    }
+                }
+
+                if (networkRegistrationError) {
+                    CY_LOGE(TAG, "%s [%d]: Network Registration Error", __FUNCTION__, __LINE__);
+                    break;
+                }
+            }
+        }
+
+
+        // GPRS network
+        if (Modem_SendATCommand(modem_p->handle,
+                                AT_CMD_TEST_GPRS_NETWORK,
+                                modem_p->line_buffer_p,
+                                modem_p->line_buffer_size)) {
+
+            if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                // command is supported
+                CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+
+                bool networkRegistrationError;;
+
+                if (Modem_SendATCommand(modem_p->handle,
+                                        AT_CMD_SET_GPRS_NETWORK_PRESENTATION,
+                                        modem_p->line_buffer_p,
+                                        modem_p->line_buffer_size)) {
+
+                    if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                        CY_LOGE(TAG, "%s [%d]: Failed to set GSM network register presentation", __FUNCTION__, __LINE__);
+                        break;
+
+                    } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                        CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                    }
+                }
+
+                networkRegistrationError = true;
+
+                for (i = 0; i < MAX_QUERY_NETWORK_REGISTRATION_RETRIES; i++) {
+                    if (Modem_SendATCommand(modem_p->handle,
+                                            AT_CMD_QUERY_GPRS_NETWORK,
+                                            modem_p->line_buffer_p,
+                                            modem_p->line_buffer_size)) {
+
+                        if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                            CY_LOGE(TAG, "%s [%d]: Failed to register to GPRS network", __FUNCTION__, __LINE__);
+                            break;
+
+                        } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                            CY_LOGD(TAG, "[%d] %s", i, modem_p->line_buffer_p);
+
+                            if (parse_network_registration_response(modem_p->line_buffer_p)) {
+                                networkRegistrationError = false;
+                                break;
+                            }
+
+                            cy_rtos_delay_milliseconds(QUERY_NETWORK_REGISTRATION_INTERVAL_MSEC);
+                        }
+                    }
+                }
+
+                if (networkRegistrationError) {
+                    CY_LOGE(TAG, "%s [%d]: Network Registration Error", __FUNCTION__, __LINE__);
+                    break;
+                }
+            }
+        }
+
+        // packet domain service
+        if (Modem_SendATCommand(modem_p->handle,
+                                AT_CMD_TEST_PACKET_DOMAIN,
+                                modem_p->line_buffer_p,
+                                modem_p->line_buffer_size)) {
+
+            if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                // command is supported
+                CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+
+                bool attachmentError;;
+
+                if (Modem_SendATCommand(modem_p->handle,
+                                        AT_CMD_ATTACH_PACKET_DOMAIN,
+                                        modem_p->line_buffer_p,
+                                        modem_p->line_buffer_size)) {
+
+                    if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                        CY_LOGE(TAG, "%s [%d]: Failed to attach to packet domain service", __FUNCTION__, __LINE__);
+                        break;
+
+                    } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                        CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                    }
+                }
+
+                attachmentError = true;
+
+                for (i = 0; i < MAX_QUERY_PACKET_DOMAIN_RETRIES; i++) {
+                    if (Modem_SendATCommand(modem_p->handle,
+                                            AT_CMD_QUERY_PACKET_DOMAIN,
+                                            modem_p->line_buffer_p,
+                                            modem_p->line_buffer_size)) {
+
+                        if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                            CY_LOGE(TAG, "%s [%d]: Failed to query packet domain attachment status", __FUNCTION__, __LINE__);
+                            break;
+
+                        } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                            CY_LOGD(TAG, "[%d] %s", i, modem_p->line_buffer_p);
+
+                            if (parse_attach_packet_domain_response(modem_p->line_buffer_p)) {
+                                attachmentError = false;
+                                break;
+                            }
+
+                            cy_rtos_delay_milliseconds(QUERY_PACKET_DOMAIN_INTERVAL_MSEC);
+                        }
+                    }
+                }
+
+                if (attachmentError) {
+                    CY_LOGE(TAG, "%s [%d]: Packet Domain Attachment Error", __FUNCTION__, __LINE__);
+                    break;
+                }
             }
         }
 
         // signal quality
-        if (Modem_SendATCommand(modem_p->handle,
-                                AT_CMD_QUERY_SIGNAL_QUALITY,
-                                modem_p->line_buffer_p,
-                                modem_p->line_buffer_size)) {
-            if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
-                CY_LOGE(TAG, "%s [%d]: Error reading: signal quality", __FUNCTION__, __LINE__);
-                break;
+        bool signalQualityError = true;
 
-            } else {
-                CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+        for (i = 0; i < MAX_QUERY_SIGNAL_QUALITY_RETRIES; i++) {
+            if (Modem_SendATCommand(modem_p->handle,
+                                    AT_CMD_QUERY_SIGNAL_QUALITY,
+                                    modem_p->line_buffer_p,
+                                    modem_p->line_buffer_size)) {
+
+                if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                    CY_LOGE(TAG, "%s [%d]: Error reading: signal quality", __FUNCTION__, __LINE__);
+                    break;
+
+                } else {
+                    CY_LOGD(TAG, "[%d] %s", i, modem_p->line_buffer_p);
+                }
             }
+
+            if (parse_signal_quality_response(modem_p->line_buffer_p)) {
+                signalQualityError = false;
+                break;
+            }
+
+            cy_rtos_delay_milliseconds(QUERY_SIGNAL_QUALITY_INTERVAL_MSEC);
+        }
+
+        if (signalQualityError) {
+            CY_LOGE(TAG, "%s [%d]: Signal Quality Error", __FUNCTION__, __LINE__);
+            break;
         }
 
 #ifdef AT_CMD_QUERY_UE_INFO
@@ -1002,6 +1485,48 @@ bool modem_start_ppp(cy_modem_t *modem_p,
             }
         }
 
+
+        // show pdp address
+        if (Modem_SendATCommand(modem_p->handle,
+                                AT_CMD_TEST_PDP_ADDRESS,
+                                modem_p->line_buffer_p,
+                                modem_p->line_buffer_size)) {
+
+            if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                // command is supported
+                CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+
+                if (Modem_SendATCommand(modem_p->handle,
+                                        AT_CMD_SHOW_PDP_ADDRESS,
+                                        modem_p->line_buffer_p,
+                                        modem_p->line_buffer_size)) {
+
+                    if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                        CY_LOGE(TAG, "%s [%d]: Error: show PDP address", __FUNCTION__, __LINE__);
+                        break;
+
+                    } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                        CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                    }
+                }
+            }
+        }
+
+        // connect response format
+        if (Modem_SendATCommand(modem_p->handle,
+                                AT_CMD_SET_CONNECT_RESPONSE_FORMAT,
+                                modem_p->line_buffer_p,
+                                modem_p->line_buffer_size)) {
+
+            if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                CY_LOGE(TAG, "%s [%d]: Error: set connect response format", __FUNCTION__, __LINE__);
+                break;
+
+            } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+            }
+        }
+
         /* Enter PPP mode */
         result = cy_modem_change_mode(modem_p, CY_MODEM_PPP_MODE);
         if (result) {
@@ -1033,5 +1558,8 @@ bool modem_stop_ppp(cy_modem_t *modem_p)
         }
         modem_p->is_data_connected = false;
     }
+
+    result = true; // ignore errors
+
     return result;
 }
