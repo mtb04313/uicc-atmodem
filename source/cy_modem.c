@@ -87,6 +87,7 @@
 #endif
 
 #define MAX_QUERY_SIM_CARD_STATUS_RETRIES   20
+#define QUERY_SIM_CARD_STATUS_INTERVAL_MSEC 1000
 
 #define MAX_GPS_READY_RETRIES               10
 #define WAIT_FOR_GPS_READY_MSEC             1000
@@ -461,7 +462,7 @@ static bool modem_power_on(cy_modem_t *modem_p)
 
 #elif (PPP_MODEM_POWER_METHOD == PPP_POWER_STEP_METHOD)
         bool value = cyhal_gpio_read(MODEM_POWER_KEY);
-        if (value) {
+        if (value != MODEM_POWER_ON) {
             cyhal_gpio_write(MODEM_POWER_KEY, MODEM_POWER_ON);
         } else {
             // do a pulse
@@ -489,7 +490,7 @@ static void modem_power_off(cy_modem_t *modem_p)
 
 #elif (PPP_MODEM_POWER_METHOD == PPP_POWER_STEP_METHOD)
         bool value = cyhal_gpio_read(MODEM_POWER_KEY);
-        if (value) {
+        if (value == MODEM_POWER_OFF) {
             // do a pulse
             cyhal_gpio_write(MODEM_POWER_KEY, MODEM_POWER_ON);
             cy_rtos_delay_milliseconds(POWER_OFF_PULSE_WIDTH_MSEC);
@@ -668,7 +669,6 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
                 CY_LOGD(TAG, "First Power On");
 
 #if (PPP_MODEM_POWER_METHOD == PPP_SIMPLE_SWITCH_METHOD)
-                /*
                 // in case the modem is already running PPP, stop it first
                 CY_LOGD(TAG, "Stop PPP");
                 modem_stop_ppp(modem_p);
@@ -677,7 +677,7 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
                 CY_LOGD(TAG, "Power off modem");
                 cyhal_gpio_write(MODEM_POWER_KEY, MODEM_POWER_OFF);
                 cy_rtos_delay_milliseconds(POWER_OFF_PULSE_WIDTH_MSEC);
-                */
+
 #elif (PPP_MODEM_POWER_METHOD == PPP_POWER_STEP_METHOD)
                 // in case the modem is already running PPP, stop it first
                 CY_LOGD(TAG, "Stop PPP");
@@ -868,9 +868,11 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
                     } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
                         CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                         simCardError = false;
+                        break;
                     }
-                    break;
                 }
+
+                cy_rtos_delay_milliseconds(QUERY_SIM_CARD_STATUS_INTERVAL_MSEC);
             }
 
             if (simCardError) {
