@@ -702,12 +702,28 @@ bool Modem_WriteCommand(_in_ Modem_Handle_t handle,
     size_t bytesWritten;
     ModemUart_t* modemUart_p = (ModemUart_t*)handle;
 
-    ReturnAssert(handle != INVALID_HANDLE, false);
-    ReturnAssert(modemUart_p->magic == MODEM_HANDLE_IDENT, false);
     ReturnAssert(commandBuf_p != NULL, false);
+    ReturnAssert(handle != INVALID_HANDLE, false);
+
+    // don't throw assertion here, as a PPP-disconnect may cause
+    // tcpip stack to send remaining data. Just ignore write
+    // attempts if modemUart_p has already been deleted
+    //
+    //ReturnAssert(modemUart_p->magic == MODEM_HANDLE_IDENT, false);
+    //ReturnAssert(uart_obj_p != NULL, false);
+
+    if (modemUart_p->magic != MODEM_HANDLE_IDENT) {
+        CY_LOGD(TAG, "%s [%d] missing magic identifier, write aborted",
+                         __FUNCTION__, __LINE__);
+        return false;
+    }
 
     cyhal_uart_t *uart_obj_p = modemUart_p->uart_obj_p;
-    ReturnAssert(uart_obj_p != NULL, false);
+    if (uart_obj_p == NULL) {
+        CY_LOGD(TAG, "%s [%d] uart_obj_p is NULL, write aborted",
+                         __FUNCTION__, __LINE__);
+        return false;
+    }
 
     /* CY_LOGD(TAG, "%s [%d] handle=%p commandBufSize=%u",
                      __FUNCTION__, __LINE__, handle, commandBufSize); */

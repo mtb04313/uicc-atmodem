@@ -939,6 +939,8 @@ bool Modem_SendATCommand( _in_  Modem_Handle_t handle,
     if (retValue) {
         size_t temp;
 
+        memset(buffer, 0, sizeof(buffer));
+
         /* read characters into response buffer until we get a CR or NL */
         while ((temp = Modem_ReadResponse(handle,
                                           INTER_WORD_READ_TIMEOUT_MSEC,

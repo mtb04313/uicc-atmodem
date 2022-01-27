@@ -58,6 +58,7 @@
 
 #define CY_MODEM_RESULT_OK          AT_RSP_OK       //"OK"
 #define CY_MODEM_RESULT_ERROR       AT_RSP_ERROR    //"ERROR"
+#define CY_MODEM_RESULT_ABORTED     AT_RSP_ABORTED  //"ABORTED"
 
 #define LINE_BUFFER_SIZE            512
 
@@ -66,24 +67,27 @@
 #endif
 
 #define MODEM_POWER_KEY             PPP_MODEM_POWER_KEY
+#define MODEM_POWER_ON              PPP_MODEM_POWER_KEY_ON_LEVEL
+#define MODEM_POWER_OFF             PPP_MODEM_POWER_KEY_OFF_LEVEL
 
 #if (PPP_MODEM_POWER_METHOD == PPP_SIMPLE_SWITCH_METHOD)
-#define MODEM_POWER_ON                      PPP_MODEM_POWER_KEY_ON_LEVEL
-#define MODEM_POWER_OFF                     PPP_MODEM_POWER_KEY_OFF_LEVEL
 #define POWER_OFF_PULSE_WIDTH_MSEC          3000
 
 // 20 to 30sec works; 5 to 12.5sec failed; 15sec ok on 1 modem, but failed on WaveShare dongle
 #define MODEM_POWER_ON_WAIT_INTERVAL_MSEC   30000
 
 #elif (PPP_MODEM_POWER_METHOD == PPP_POWER_STEP_METHOD)
-#define MODEM_POWER_ON                      PPP_MODEM_POWER_KEY_ON_LEVEL
-#define MODEM_POWER_OFF                     PPP_MODEM_POWER_KEY_OFF_LEVEL
 #define POWER_ON_PULSE_WIDTH_MSEC           500
 #define POWER_OFF_PULSE_WIDTH_MSEC          2500
 
-#define MODEM_POWER_ON_WAIT_INTERVAL_MSEC   10000 //was 50000
-#define FIRST_POWER_ON_DELAY_1_MSEC         2000
-#define FIRST_POWER_ON_DELAY_2_MSEC         18000
+#define MODEM_POWER_ON_WAIT_INTERVAL_MSEC   10000
+#define FIRST_POWER_ON_DELAY_MSEC           20000
+
+#elif (PPP_MODEM_POWER_METHOD == PPP_PULSE_SWITCH_METHOD)
+#define POWER_ON_PULSE_WIDTH_MSEC           100
+#define POWER_OFF_PULSE_WIDTH_MSEC          3000
+#define MODEM_POWER_ON_WAIT_INTERVAL_MSEC   5000
+
 #endif
 
 #define MAX_QUERY_SIM_CARD_STATUS_RETRIES   20
@@ -91,13 +95,13 @@
 
 #define MAX_GPS_READY_RETRIES               10
 #define WAIT_FOR_GPS_READY_MSEC             1000
-#define SWITCH_PPP_TO_CMD_MODE_DELAY_MSEC   500 // was 1000
+#define SWITCH_PPP_TO_CMD_MODE_DELAY_MSEC   2000
 
 #define MAX_QUERY_OPERATOR_SELECTION_RETRIES    100
 #define QUERY_OPERATOR_SELECTION_INTERVAL_MSEC  1000
 
-#define MAX_QUERY_NETWORK_REGISTRATION_RETRIES      100
-#define QUERY_NETWORK_REGISTRATION_INTERVAL_MSEC    1000
+#define MAX_QUERY_NETWORK_REGISTRATION_RETRIES      200
+#define QUERY_NETWORK_REGISTRATION_INTERVAL_MSEC    3000
 
 #define MAX_QUERY_PACKET_DOMAIN_RETRIES     100
 #define QUERY_PACKET_DOMAIN_INTERVAL_MSEC   1000
@@ -107,9 +111,24 @@
 #define QUERY_SIGNAL_QUALITY_INTERVAL_MSEC  1000
 #define SIGNAL_QUALITY_RSSI_UNKNOWN         99
 
-#define QUERY_NETWORK_REGISTRATION_STATUS_REGISTERED_HOME   1
-#define QUERY_NETWORK_REGISTRATION_STATUS_REGISTERED_ROAM   5
+#define NETWORK_REGISTRATION_STATUS_NOT_REG_NOT_TRYING    0
+#define NETWORK_REGISTRATION_STATUS_REG_HOME              1
+#define NETWORK_REGISTRATION_STATUS_TRYING                2
+#define NETWORK_REGISTRATION_STATUS_REG_DENIED            3
+#define NETWORK_REGISTRATION_STATUS_UNKNOWN               4
+#define NETWORK_REGISTRATION_STATUS_REG_ROAM              5
+#define NETWORK_REGISTRATION_STATUS_EMERGENCY_ONLY        8
 
+#define RADIO_ACCESS_TECH_GSM               0
+#define RADIO_ACCESS_TECH_GSM_COMPACT       1
+#define RADIO_ACCESS_TECH_UTRAN             2
+#define RADIO_ACCESS_TECH_GSM_GPRS_EDGE     3
+#define RADIO_ACCESS_TECH_UTRAN_HSDPA       4
+#define RADIO_ACCESS_TECH_UTRAN_HSUPAT      5
+#define RADIO_ACCESS_TECH_UTRAN_HSDPA_HSUPA 6
+#define RADIO_ACCESS_TECH_E_UTRAN           7
+#define RADIO_ACCESS_TECH_EC_GSM_IOT        8
+#define RADIO_ACCESS_TECH_E_UTRAN_NB_S1     9
 
 
 /*-- Local Data -------------------------------------------------*/
@@ -245,30 +264,135 @@ static bool extract_gps_location( const char* input_p,
 }
 #endif
 
+static const char* str_network_registration_status(int status)
+{
+    switch(status) {
+    case NETWORK_REGISTRATION_STATUS_NOT_REG_NOT_TRYING:
+        return "Not registered - not trying";
+
+    case NETWORK_REGISTRATION_STATUS_REG_HOME:
+        return "Registered - home network";
+
+    case NETWORK_REGISTRATION_STATUS_TRYING:
+        return "Trying to register";
+
+    case NETWORK_REGISTRATION_STATUS_REG_DENIED:
+        return "Registration denied";
+
+    case NETWORK_REGISTRATION_STATUS_UNKNOWN:
+        return "Unknown";
+
+    case NETWORK_REGISTRATION_STATUS_REG_ROAM:
+        return "Registered - roaming";
+
+    case NETWORK_REGISTRATION_STATUS_EMERGENCY_ONLY:
+        return "Attached for emergency bearer services only";
+
+    default:
+        break;
+    }
+    return "Invalid";
+}
+
+static const char* str_radio_access_technology(int tech)
+{
+    switch(tech) {
+    case RADIO_ACCESS_TECH_GSM:
+        return "GSM; 2G";
+
+    case RADIO_ACCESS_TECH_GSM_COMPACT:
+        return "GSM Compact";
+
+    case RADIO_ACCESS_TECH_UTRAN:
+        return "UTRAN; 3G";
+
+    case RADIO_ACCESS_TECH_GSM_GPRS_EDGE:
+        return "GSM/GPRS with EDGE availability; 2.75G";
+
+    case RADIO_ACCESS_TECH_UTRAN_HSDPA:
+        return "UTRAN with HSDPA availability; 3.5G";
+
+    case RADIO_ACCESS_TECH_UTRAN_HSUPAT:
+        return "UTRAN with HSUPA availability; 3.5G";
+
+    case RADIO_ACCESS_TECH_UTRAN_HSDPA_HSUPA:
+        return "UTRAN with HSDPA and HSUPA availability; 3.5G";
+
+    case RADIO_ACCESS_TECH_E_UTRAN:
+        return "E-UTRAN; LTE";
+
+    case RADIO_ACCESS_TECH_EC_GSM_IOT:
+        return "EC-GSM-IoT (A/Gb mode); LTE Cat M1";
+
+    case RADIO_ACCESS_TECH_E_UTRAN_NB_S1:
+        return "E-UTRAN (NB-S1 mode); LTE Cat NB1";
+
+    default:
+        break;
+    }
+    return "Invalid";
+}
+
 // Warning: line_buffer_p may be altered
 static bool parse_network_registration_response(char *line_buffer_p)
 {
-    char *comma_p;
+    char *first_p;
     ReturnAssert(line_buffer_p != NULL, false);
 
     //CY_LOGD(TAG, "%s [%d] %s", __FUNCTION__, __LINE__, line_buffer_p);
 
     // get the field after the first separator
-    if ((comma_p = strstr(line_buffer_p, ",")) != NULL) {
-        comma_p++;
+    if ((first_p = strstr(line_buffer_p, ",")) != NULL) {
+        first_p++;
 
         char *second_p;
-
-        if ((second_p = strstr(comma_p, ",")) != NULL) {
-            second_p = '\0';
+        if ((second_p = strstr(first_p, ",")) != NULL) {
+            *second_p = '\0';
         }
 
         int status;
-        status = atoi(comma_p);
-        CY_LOGD(TAG, "status = %d", status);
+        status = atoi(first_p);
+        CY_LOGD(TAG, "Status (stat) = %d - %s",
+                status, str_network_registration_status(status));
+        second_p++;
 
-        if ((status == QUERY_NETWORK_REGISTRATION_STATUS_REGISTERED_HOME) ||
-            (status == QUERY_NETWORK_REGISTRATION_STATUS_REGISTERED_ROAM)) {
+        char *third_p;
+        if ((third_p = strstr(second_p, ",")) != NULL) {
+            *third_p = '\0';
+
+            CY_LOGD(TAG, "Location Area (lac) = %s", second_p);
+            third_p++;
+
+            char *fourth_p;
+            if ((fourth_p = strstr(third_p, ",")) != NULL) {
+                *fourth_p = '\0';
+
+                CY_LOGD(TAG, "Cell ID (ci) = %s", third_p);
+                fourth_p++;
+
+                char *fifth_p;
+                if ((fifth_p = strstr(fourth_p, ",")) != NULL) {
+                    *fifth_p = '\0';
+                    fifth_p++;
+                }
+
+                if (*fourth_p != '\0') {
+                    int tech;
+                    tech = atoi(fourth_p);
+                    CY_LOGD(TAG, "Access Tech (AcT) = %d - %s",
+                            tech, str_radio_access_technology(tech));
+                }
+
+                if (fifth_p != NULL) {
+                    if (*fifth_p != '\0') {
+                        CY_LOGD(TAG, "Routing Area (rac) = %s", fifth_p);
+                    }
+                }
+            }
+        }
+
+        if ((status == NETWORK_REGISTRATION_STATUS_REG_HOME) ||
+            (status == NETWORK_REGISTRATION_STATUS_REG_ROAM)) {
             return true;
         }
     }
@@ -276,7 +400,6 @@ static bool parse_network_registration_response(char *line_buffer_p)
     return false;
 }
 
-#if 1
 // Warning: line_buffer_p may be altered
 static bool parse_attach_packet_domain_response(char *line_buffer_p)
 {
@@ -295,7 +418,7 @@ static bool parse_attach_packet_domain_response(char *line_buffer_p)
         if ((crlf_p = strstr(space_p, "\r\n")) != NULL) {
 
             int value;
-            crlf_p = '\0';
+            *crlf_p = '\0';
 
             value = atoi(space_p);
             CY_LOGD(TAG, "value = %d", value);
@@ -308,40 +431,6 @@ static bool parse_attach_packet_domain_response(char *line_buffer_p)
 
     return false;
 }
-
-#else
-// Warning: line_buffer_p may be altered
-static bool parse_attach_packet_domain_response(char *line_buffer_p)
-{
-    char *crlf_p;
-    ReturnAssert(line_buffer_p != NULL, false);
-
-    //CY_LOGD(TAG, "%s [%d] %s", __FUNCTION__, __LINE__, line_buffer_p);
-
-    // get the field before the first separator
-    if ((crlf_p = strstr(line_buffer_p, "\r\n")) != NULL) {
-        char *space_p;
-
-        if ((space_p = strstr(line_buffer_p, " ")) != NULL) {
-            space_p++;
-
-            if (space_p < crlf_p) {
-                int value;
-                crlf_p = '\0';
-
-                value = atoi(space_p);
-                CY_LOGD(TAG, "value = %d", value);
-
-                if (value == ATTACH_PACKET_DOMAIN_SERVICE) {
-                    return true;
-                }
-            }
-        }
-    }
-
-    return false;
-}
-#endif
 
 // Warning: line_buffer_p may be altered
 static bool parse_signal_quality_response(char *line_buffer_p)
@@ -360,7 +449,7 @@ static bool parse_signal_quality_response(char *line_buffer_p)
 
             if (space_p < comma_p) {
                 int rssi;
-                comma_p = '\0';
+                *comma_p = '\0';
 
                 rssi = atoi(space_p);
                 CY_LOGD(TAG, "rssi = %d", rssi);
@@ -416,12 +505,11 @@ static bool wait_for_modem_ready( cy_modem_t *modem_p,
                                 modem_p->line_buffer_p,
                                 modem_p->line_buffer_size)) {
             if (strstr(modem_p->line_buffer_p, AT_RSP_OK) != NULL) {
-                CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                 return true;
             }
         }
 #endif
-
     }
 
     if (Modem_SendATCommand(modem_p->handle,
@@ -429,7 +517,7 @@ static bool wait_for_modem_ready( cy_modem_t *modem_p,
                             modem_p->line_buffer_p,
                             modem_p->line_buffer_size)) {
         if (strstr(modem_p->line_buffer_p, AT_RSP_OK) != NULL) {
-            CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+            //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
             return true;
         }
     }
@@ -468,6 +556,15 @@ static bool modem_power_on(cy_modem_t *modem_p)
             // do a pulse
             do_modem_power_on_pulse();
         }
+
+#elif (PPP_MODEM_POWER_METHOD == PPP_PULSE_SWITCH_METHOD)
+        cyhal_gpio_write(MODEM_POWER_KEY, MODEM_POWER_ON);
+        cy_rtos_delay_milliseconds(POWER_ON_PULSE_WIDTH_MSEC);
+
+        cyhal_gpio_write(MODEM_POWER_KEY, MODEM_POWER_OFF);
+        cy_rtos_delay_milliseconds(POWER_ON_PULSE_WIDTH_MSEC);
+
+        cyhal_gpio_write(MODEM_POWER_KEY, MODEM_POWER_ON);
 #endif
 
         modem_p->is_powered_on = true;
@@ -485,10 +582,14 @@ static void modem_power_off(cy_modem_t *modem_p)
     if (modem_p->is_powered_on) {
         CY_LOGD(TAG, "%s", __FUNCTION__);
 
-#if (PPP_MODEM_POWER_METHOD == PPP_SIMPLE_SWITCH_METHOD)
+#if ((PPP_MODEM_POWER_METHOD == PPP_SIMPLE_SWITCH_METHOD) || \
+     (PPP_MODEM_POWER_METHOD == PPP_PULSE_SWITCH_METHOD))
+
         cyhal_gpio_write(MODEM_POWER_KEY, MODEM_POWER_OFF);
+        cy_rtos_delay_milliseconds(POWER_OFF_PULSE_WIDTH_MSEC);
 
 #elif (PPP_MODEM_POWER_METHOD == PPP_POWER_STEP_METHOD)
+
         bool value = cyhal_gpio_read(MODEM_POWER_KEY);
         if (value == MODEM_POWER_OFF) {
             // do a pulse
@@ -509,15 +610,6 @@ static void modem_power_off(cy_modem_t *modem_p)
         modem_p->is_powered_on = false;
     }
 }
-
-#if 0
-static void modem_reset(void)
-{
-    modem_power_off();
-    modem_power_on(MODEM_POWER_ON_WAIT_INTERVAL_MSEC);
-}
-#endif
-
 
 static bool modem_set_max_baud_rate(cy_modem_t *modem_p,
                                     uint32_t baudrate)
@@ -540,7 +632,7 @@ static bool modem_set_max_baud_rate(cy_modem_t *modem_p,
         if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
             CY_LOGE(TAG, "%s [%d]: pdp context failed", __FUNCTION__, __LINE__);
         } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-            CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+            //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
             result = true;
         }
     }
@@ -668,22 +760,23 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
             if (Modem_IsFlagFirstRead(modem_p->handle)) {
                 CY_LOGD(TAG, "First Power On");
 
-#if (PPP_MODEM_POWER_METHOD == PPP_SIMPLE_SWITCH_METHOD)
+                // assume the modem may be already running (due to a previous session)
+                modem_p->is_powered_on = true;
+
                 // in case the modem is already running PPP, stop it first
                 CY_LOGD(TAG, "Stop PPP");
                 modem_stop_ppp(modem_p);
 
                 // then turn off the modem
                 CY_LOGD(TAG, "Power off modem");
-                cyhal_gpio_write(MODEM_POWER_KEY, MODEM_POWER_OFF);
-                cy_rtos_delay_milliseconds(POWER_OFF_PULSE_WIDTH_MSEC);
+
+#if ((PPP_MODEM_POWER_METHOD == PPP_SIMPLE_SWITCH_METHOD) || \
+     (PPP_MODEM_POWER_METHOD == PPP_PULSE_SWITCH_METHOD))
+
+                cy_modem_powerdown(modem_p);
 
 #elif (PPP_MODEM_POWER_METHOD == PPP_POWER_STEP_METHOD)
-                // in case the modem is already running PPP, stop it first
-                CY_LOGD(TAG, "Stop PPP");
-                modem_stop_ppp(modem_p);
 
-                // then turn off the modem
                 int i;
                 for (i = 0; i < 2; i++) {
                     CY_LOGD(TAG, "Power step %d", i);
@@ -691,9 +784,8 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
                     do_modem_power_on_pulse();
                 }
 
-                cy_rtos_delay_milliseconds(FIRST_POWER_ON_DELAY_1_MSEC);
-
-                cy_rtos_delay_milliseconds(FIRST_POWER_ON_DELAY_2_MSEC);
+                // combined the 2 delays
+                cy_rtos_delay_milliseconds(FIRST_POWER_ON_DELAY_MSEC);
 #endif
             }
         }
@@ -715,7 +807,7 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
                     CY_LOGE(TAG, "%s [%d]: Error reading: ATE0", __FUNCTION__, __LINE__);
                     break;
                 } else {
-                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                    //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                 }
             }
 
@@ -728,7 +820,7 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
                     CY_LOGE(TAG, "%s [%d]: Error: flow control", __FUNCTION__, __LINE__);
                     break;
                 } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                    //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                 }
             }
 
@@ -737,7 +829,10 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
                 CY_LOGE(TAG, "%s [%d]: modem_set_max_baud_rate failed", __FUNCTION__, __LINE__);
                 break;
             }
-#if 0
+
+#if 0   // don't save settings as it may cause modem not to work on another setup,
+        // which doesn't know the new defaults!
+
             // save user settings
             if (Modem_SendATCommand(modem_p->handle,
                     AT_CMD_SAVE_USER_SETTINGS,
@@ -747,10 +842,11 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
                     CY_LOGE(TAG, "%s [%d]: Error saving settings", __FUNCTION__, __LINE__);
                     break;
                 } else {
-                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                    //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                 }
             }
 #endif
+
             // set error msg format: verbose
             if (Modem_SendATCommand(modem_p->handle,
                                     AT_CMD_SET_ERROR_MSG_FORMAT_VERBOSE,
@@ -760,7 +856,7 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
                     CY_LOGE(TAG, "%s [%d]: Error: msg format", __FUNCTION__, __LINE__);
                     break;
                 } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                    //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                 }
             }
 
@@ -773,10 +869,11 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
                     CY_LOGE(TAG, "%s [%d]: Error: TA response format", __FUNCTION__, __LINE__);
                     break;
                 } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                    //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                 }
             }
 
+#ifdef AT_CMD_SET_DTR_FUNCTION_MODE_IGNORE
             // set DTR function mode: ignore
             if (Modem_SendATCommand(modem_p->handle,
                                     AT_CMD_SET_DTR_FUNCTION_MODE_IGNORE,
@@ -786,9 +883,10 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
                     CY_LOGE(TAG, "%s [%d]: Error: DTR function mode", __FUNCTION__, __LINE__);
                     break;
                 } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                    //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                 }
             }
+#endif
 
             // query baud rate
             if (Modem_SendATCommand(modem_p->handle,
@@ -799,12 +897,12 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
                     CY_LOGE(TAG, "%s [%d]: Error: query baud rate", __FUNCTION__, __LINE__);
                     break;
                 } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                    //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                 }
             }
 
-#if 0
-            // REVISIT:Quectel BG96 code
+#if 0       // Quectel BG96 test code
+
             // set QCFG
             if (Modem_SendATCommand(modem_p->handle,
                                     AT_CMD_SET_QCFG_BAND,
@@ -814,7 +912,7 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
                     CY_LOGE(TAG, "%s [%d]: Error: QCFG band", __FUNCTION__, __LINE__);
                     break;
                 } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                    //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                 }
             }
 
@@ -826,7 +924,7 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
                     CY_LOGE(TAG, "%s [%d]: Error: QCFG iotopmode", __FUNCTION__, __LINE__);
                     break;
                 } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                    //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                 }
             }
 
@@ -838,7 +936,7 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
                     CY_LOGE(TAG, "%s [%d]: Error: QCFG nwscanseq", __FUNCTION__, __LINE__);
                     break;
                 } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                    //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                 }
             }
 
@@ -850,7 +948,7 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
                     CY_LOGE(TAG, "%s [%d]: Error: QCFG nwscanmode", __FUNCTION__, __LINE__);
                     break;
                 } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                    //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                 }
             }
 #endif
@@ -866,7 +964,7 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
                     if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
                         CY_LOGE(TAG, "%s [%d]: Sim Card error", __FUNCTION__, __LINE__);
                     } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                        CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                        //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                         simCardError = false;
                         break;
                     }
@@ -889,7 +987,7 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
                     CY_LOGE(TAG, "%s [%d]: Error reading: IMSI", __FUNCTION__, __LINE__);
                     break;
                 } else {
-                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                    //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                 }
             }
 
@@ -904,7 +1002,7 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
                                     modem_p->line_buffer_p,
                                     modem_p->line_buffer_size)) {
                 if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                    //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                 }
             }
 #endif
@@ -916,7 +1014,7 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
                                     modem_p->line_buffer_p,
                                     modem_p->line_buffer_size)) {
                 if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                    //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                 }
             }
 #endif
@@ -941,7 +1039,7 @@ bool cy_modem_powerdown(cy_modem_t *modem_p)
             if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
                 CY_LOGE(TAG, "%s [%d]: Error: power down", __FUNCTION__, __LINE__);
             } else {
-                CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
             }
         }
     }
@@ -980,7 +1078,7 @@ bool cy_modem_update_gps_location(cy_modem_t *modem_p)
         if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
             CY_LOGE(TAG, "%s [%d]: Error turning on GPS", __FUNCTION__, __LINE__);
         } else {
-            CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+            //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
             result = true;
         }
     }
@@ -1000,7 +1098,7 @@ bool cy_modem_update_gps_location(cy_modem_t *modem_p)
                     CY_LOGE(TAG, "%s [%d]: Error reading: CGPSINFO", __FUNCTION__, __LINE__);
                     break;
                 } else {
-                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                    //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
 
                     if (extract_gps_location( modem_p->line_buffer_p,
                                               location,
@@ -1028,7 +1126,7 @@ bool cy_modem_update_gps_location(cy_modem_t *modem_p)
             if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
                 CY_LOGE(TAG, "%s [%d]: Error turning off GPS", __FUNCTION__, __LINE__);
             } else {
-                CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
             }
         }
     }
@@ -1068,7 +1166,7 @@ bool cy_modem_change_mode( cy_modem_t *modem_p,
                 if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
                     CY_LOGE(TAG, "%s [%d]: enter ppp mode failed", __FUNCTION__, __LINE__);
                 } else {
-                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                    //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                     result = true;
                 }
             }
@@ -1081,7 +1179,7 @@ bool cy_modem_change_mode( cy_modem_t *modem_p,
                 if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
                     CY_LOGE(TAG, "%s [%d]: enter ppp mode failed", __FUNCTION__, __LINE__);
                 } else {
-                    CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                    //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                     result = true;
                 }
             }
@@ -1107,7 +1205,7 @@ bool cy_modem_change_mode( cy_modem_t *modem_p,
             if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
                 CY_LOGE(TAG, "%s [%d]: exit ppp mode failed", __FUNCTION__, __LINE__);
             } else {
-                CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                 result = true;
             }
         }
@@ -1140,7 +1238,7 @@ bool modem_start_ppp(cy_modem_t *modem_p,
                 break;
 
             } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
             }
         }
 
@@ -1155,7 +1253,7 @@ bool modem_start_ppp(cy_modem_t *modem_p,
                 break;
 
             } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
             }
         }
 
@@ -1170,10 +1268,11 @@ bool modem_start_ppp(cy_modem_t *modem_p,
                 break;
 
             } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
             }
         }
 
+#ifdef AT_CMD_OPERATOR_SELECTION
         // cellular operator name
         bool operatorSelectionError = true;
 
@@ -1188,7 +1287,7 @@ bool modem_start_ppp(cy_modem_t *modem_p,
                     break;
 
                 } else {
-                    CY_LOGD(TAG, "[%d] %s", __LINE__, modem_p->line_buffer_p);
+                    //CY_LOGD(TAG, "[%d] %s", __LINE__, modem_p->line_buffer_p);
 
                     if (strstr(modem_p->line_buffer_p, ",") != NULL) {
                         // e.g.  +COPS: 0,0,"Singtel Tata",7
@@ -1220,20 +1319,23 @@ bool modem_start_ppp(cy_modem_t *modem_p,
                 break;
 
             } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
             }
         }
+#endif
 
-
-        // GSM network
+#ifdef AT_CMD_TEST_GSM_NETWORK
+        // GSM network (2G)
         if (Modem_SendATCommand(modem_p->handle,
                                 AT_CMD_TEST_GSM_NETWORK,
                                 modem_p->line_buffer_p,
                                 modem_p->line_buffer_size)) {
 
-            if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+            if ((strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) ||
+                (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ABORTED) != NULL)) {
+
                 // command is supported
-                CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
 
                 bool networkRegistrationError;;
 
@@ -1247,7 +1349,7 @@ bool modem_start_ppp(cy_modem_t *modem_p,
                         break;
 
                     } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                        CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                        //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                     }
                 }
 
@@ -1264,7 +1366,7 @@ bool modem_start_ppp(cy_modem_t *modem_p,
                             break;
 
                         } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                            CY_LOGD(TAG, "[%d] %s", i, modem_p->line_buffer_p);
+                            //CY_LOGD(TAG, "[%d] %s", i, modem_p->line_buffer_p);
 
                             if (parse_network_registration_response(modem_p->line_buffer_p)) {
                                 networkRegistrationError = false;
@@ -1282,17 +1384,20 @@ bool modem_start_ppp(cy_modem_t *modem_p,
                 }
             }
         }
+#endif
 
-
-        // GPRS network
+#ifdef AT_CMD_TEST_GPRS_NETWORK
+        // GPRS network (3G)
         if (Modem_SendATCommand(modem_p->handle,
                                 AT_CMD_TEST_GPRS_NETWORK,
                                 modem_p->line_buffer_p,
                                 modem_p->line_buffer_size)) {
 
-            if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+            if ((strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) ||
+                (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ABORTED) != NULL)) {
+
                 // command is supported
-                CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
 
                 bool networkRegistrationError;;
 
@@ -1306,7 +1411,7 @@ bool modem_start_ppp(cy_modem_t *modem_p,
                         break;
 
                     } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                        CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                        //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                     }
                 }
 
@@ -1323,7 +1428,7 @@ bool modem_start_ppp(cy_modem_t *modem_p,
                             break;
 
                         } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                            CY_LOGD(TAG, "[%d] %s", i, modem_p->line_buffer_p);
+                            //CY_LOGD(TAG, "[%d] %s", i, modem_p->line_buffer_p);
 
                             if (parse_network_registration_response(modem_p->line_buffer_p)) {
                                 networkRegistrationError = false;
@@ -1341,8 +1446,72 @@ bool modem_start_ppp(cy_modem_t *modem_p,
                 }
             }
         }
+#endif
 
-        // packet domain service
+#ifdef AT_CMD_TEST_EPS_NETWORK
+        // EPS network (LTE)
+        if (Modem_SendATCommand(modem_p->handle,
+                                AT_CMD_TEST_EPS_NETWORK,
+                                modem_p->line_buffer_p,
+                                modem_p->line_buffer_size)) {
+
+            if ((strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) ||
+                (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ABORTED) != NULL)) {
+
+                // command is supported
+                //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+
+                bool networkRegistrationError;;
+
+                if (Modem_SendATCommand(modem_p->handle,
+                                        AT_CMD_SET_EPS_NETWORK_PRESENTATION,
+                                        modem_p->line_buffer_p,
+                                        modem_p->line_buffer_size)) {
+
+                    if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                        CY_LOGE(TAG, "%s [%d]: Failed to set EPS network register presentation", __FUNCTION__, __LINE__);
+                        break;
+
+                    } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                        //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                    }
+                }
+
+                networkRegistrationError = true;
+
+                for (i = 0; i < MAX_QUERY_NETWORK_REGISTRATION_RETRIES; i++) {
+                    if (Modem_SendATCommand(modem_p->handle,
+                                            AT_CMD_QUERY_EPS_NETWORK,
+                                            modem_p->line_buffer_p,
+                                            modem_p->line_buffer_size)) {
+
+                        if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                            CY_LOGE(TAG, "%s [%d]: Failed to register to GPRS network", __FUNCTION__, __LINE__);
+                            break;
+
+                        } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                            //CY_LOGD(TAG, "[%d] %s", i, modem_p->line_buffer_p);
+
+                            if (parse_network_registration_response(modem_p->line_buffer_p)) {
+                                networkRegistrationError = false;
+                                break;
+                            }
+
+                            cy_rtos_delay_milliseconds(QUERY_NETWORK_REGISTRATION_INTERVAL_MSEC);
+                        }
+                    }
+                }
+
+                if (networkRegistrationError) {
+                    CY_LOGE(TAG, "%s [%d]: Network Registration Error", __FUNCTION__, __LINE__);
+                    break;
+                }
+            }
+        }
+#endif
+
+#ifdef AT_CMD_TEST_PACKET_DOMAIN
+        // packet domain service (3G)
         if (Modem_SendATCommand(modem_p->handle,
                                 AT_CMD_TEST_PACKET_DOMAIN,
                                 modem_p->line_buffer_p,
@@ -1350,7 +1519,7 @@ bool modem_start_ppp(cy_modem_t *modem_p,
 
             if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
                 // command is supported
-                CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
 
                 bool attachmentError;;
 
@@ -1364,7 +1533,7 @@ bool modem_start_ppp(cy_modem_t *modem_p,
                         break;
 
                     } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                        CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                        //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                     }
                 }
 
@@ -1381,7 +1550,7 @@ bool modem_start_ppp(cy_modem_t *modem_p,
                             break;
 
                         } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                            CY_LOGD(TAG, "[%d] %s", i, modem_p->line_buffer_p);
+                            //CY_LOGD(TAG, "[%d] %s", i, modem_p->line_buffer_p);
 
                             if (parse_attach_packet_domain_response(modem_p->line_buffer_p)) {
                                 attachmentError = false;
@@ -1399,6 +1568,7 @@ bool modem_start_ppp(cy_modem_t *modem_p,
                 }
             }
         }
+#endif
 
         // signal quality
         bool signalQualityError = true;
@@ -1414,7 +1584,7 @@ bool modem_start_ppp(cy_modem_t *modem_p,
                     break;
 
                 } else {
-                    CY_LOGD(TAG, "[%d] %s", i, modem_p->line_buffer_p);
+                    //CY_LOGD(TAG, "[%d] %s", i, modem_p->line_buffer_p);
                 }
             }
 
@@ -1442,7 +1612,7 @@ bool modem_start_ppp(cy_modem_t *modem_p,
                 break;
 
             } else {
-                CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
 
                 // e.g. +CPSI: NO SERVICE,Online
                 if (strstr(modem_p->line_buffer_p, AT_RSP_UE_INFO_PATTERN_FAILED) != NULL) {
@@ -1459,34 +1629,45 @@ bool modem_start_ppp(cy_modem_t *modem_p,
 #endif
 
         /* Set PDP Context (APN) */
-        if (strlen(apn_p) > 0) {
-            SNPRINTF( modem_p->line_buffer_p,
-                      modem_p->line_buffer_size,
-                      AT_CMD_SET_PDP_CONTEXT "=%u,\"%s\",\"%s\"\r",
-                      1,
-                      "IP",
-                      apn_p);
-        } else {
-            SNPRINTF( modem_p->line_buffer_p,
-                      modem_p->line_buffer_size,
-                      AT_CMD_SET_PDP_CONTEXT "=%u,\"%s\",\r",
-                      1,
-                      "IP");
-        }
-
         if (Modem_SendATCommand(modem_p->handle,
-                                modem_p->line_buffer_p, /* cmd */
-                                modem_p->line_buffer_p, /* response */
+                                AT_CMD_TEST_PDP_CONTEXT,
+                                modem_p->line_buffer_p,
                                 modem_p->line_buffer_size)) {
-            if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
-                CY_LOGE(TAG, "%s [%d]: pdp context failed", __FUNCTION__, __LINE__);
-                break;
 
-            } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+            if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                // command is supported
+                //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+
+                if (strlen(apn_p) > 0) {
+                    SNPRINTF( modem_p->line_buffer_p,
+                              modem_p->line_buffer_size,
+                              AT_CMD_SET_PDP_CONTEXT "=%u,\"%s\",\"%s\"\r",
+                              AT_CMD_PDP_CONTEXT_CID,
+                              AT_CMD_PDP_CONTEXT_TYPE,
+                              apn_p);
+                } else {
+                    SNPRINTF( modem_p->line_buffer_p,
+                              modem_p->line_buffer_size,
+                              AT_CMD_SET_PDP_CONTEXT "=%u,\"%s\",\r",
+                              AT_CMD_PDP_CONTEXT_CID,
+                              AT_CMD_PDP_CONTEXT_TYPE);
+                }
+
+                if (Modem_SendATCommand(modem_p->handle,
+                                        modem_p->line_buffer_p, /* cmd */
+                                        modem_p->line_buffer_p, /* response */
+                                        modem_p->line_buffer_size)) {
+
+                    if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                        CY_LOGE(TAG, "%s [%d]: pdp context failed", __FUNCTION__, __LINE__);
+                        // ignore error // break;
+
+                    } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                        //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                    }
+                }
             }
         }
-
 
         // show pdp address
         if (Modem_SendATCommand(modem_p->handle,
@@ -1496,7 +1677,7 @@ bool modem_start_ppp(cy_modem_t *modem_p,
 
             if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
                 // command is supported
-                CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
 
                 if (Modem_SendATCommand(modem_p->handle,
                                         AT_CMD_SHOW_PDP_ADDRESS,
@@ -1505,15 +1686,16 @@ bool modem_start_ppp(cy_modem_t *modem_p,
 
                     if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
                         CY_LOGE(TAG, "%s [%d]: Error: show PDP address", __FUNCTION__, __LINE__);
-                        break;
+                        // ignore error // break;
 
                     } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                        CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                        //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                     }
                 }
             }
         }
 
+#ifdef AT_CMD_SET_CONNECT_RESPONSE_FORMAT
         // connect response format
         if (Modem_SendATCommand(modem_p->handle,
                                 AT_CMD_SET_CONNECT_RESPONSE_FORMAT,
@@ -1525,9 +1707,10 @@ bool modem_start_ppp(cy_modem_t *modem_p,
                 break;
 
             } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
             }
         }
+#endif
 
         /* Enter PPP mode */
         result = cy_modem_change_mode(modem_p, CY_MODEM_PPP_MODE);
@@ -1555,7 +1738,7 @@ bool modem_stop_ppp(cy_modem_t *modem_p)
         if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
             CY_LOGE(TAG, "%s [%d]: hang up failed", __FUNCTION__, __LINE__);
         } else {
-            CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+            //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
             result = true;
         }
         modem_p->is_data_connected = false;
