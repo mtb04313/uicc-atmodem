@@ -83,21 +83,38 @@
 #define MAX_UART_READ_TRIES               1000
 #define MAX_UART_READ_CONSECUTIVE_FAILS   3
 
+#define USE_CIRCULAR_BUFFER             1 // 1:enable, 0:disable
+
+#if USE_CIRCULAR_BUFFER
 #if (MAX_MODEM_BAUD_RATE <= 230400)
-/* use this block if MAX_MODEM_BAUD_RATE <= 230400 */
-#define UART_RX_BUF_SIZE              2     //was 1
-#define UART_RX_DATA_QUEUE_SIZE       5120  //was 10240
+    #define CIRCULAR_RX_BUFFER_SIZE     1024
+
+#elif (MAX_MODEM_BAUD_RATE <= 460800)
+    #define CIRCULAR_RX_BUFFER_SIZE     2048
 
 #elif (MAX_MODEM_BAUD_RATE <= 921600)
-/* use this block if MAX_MODEM_BAUD_RATE <= 921600 */
-#define UART_RX_BUF_SIZE              2     //was 1
-#define UART_RX_DATA_QUEUE_SIZE       10240 //was 20480
+    #define CIRCULAR_RX_BUFFER_SIZE     4096
 
 #else
-/* use this block if MAX_MODEM_BAUD_RATE > 921600 */
-#define UART_RX_BUF_SIZE              80
-#define UART_RX_DATA_QUEUE_SIZE       512
+    #define CIRCULAR_RX_BUFFER_SIZE     8192
+#endif
 
+#else
+#if (MAX_MODEM_BAUD_RATE <= 230400)
+    /* use this block if MAX_MODEM_BAUD_RATE <= 230400 */
+    #define UART_RX_BUF_SIZE              2     //was 1
+    #define UART_RX_DATA_QUEUE_SIZE       5120  //was 10240
+
+#elif (MAX_MODEM_BAUD_RATE <= 921600)
+    /* use this block if MAX_MODEM_BAUD_RATE <= 921600 */
+    #define UART_RX_BUF_SIZE              2     //was 1
+    #define UART_RX_DATA_QUEUE_SIZE       10240 //was 20480
+
+#else
+    /* use this block if MAX_MODEM_BAUD_RATE > 921600 */
+    #define UART_RX_BUF_SIZE              80
+    #define UART_RX_DATA_QUEUE_SIZE       512
+#endif
 #endif
 
 
@@ -117,16 +134,27 @@ typedef struct {
     bool uart_irq_enabled;
     bool tx_done;
     bool isFlagFirstRead;
+
+#if USE_CIRCULAR_BUFFER
+    uint8_t  rxdata[CIRCULAR_RX_BUFFER_SIZE];
+    uint16_t rxdata_head_index;
+    uint16_t rxdata_tail_index;
+    cy_semaphore_t rxdata_recv_sem;
+
+#else
     cy_queue_t rx_queue;
+#endif
+
     cy_thread_t rx_task_handle;
 
 } ModemUart_t;
 
+#if (USE_CIRCULAR_BUFFER == 0)
 typedef struct {
     uint8_t buf[UART_RX_BUF_SIZE];
-    //size_t  length;
     uint16_t  length;
 } cy_uart_rx_data_message_t;
+#endif
 
 
 /*-- Local Data -------------------------------------------------*/
@@ -151,7 +179,14 @@ static ModemUart_t s_modemUartList[] = {
         .uart_irq_enabled = false,
         .tx_done = false,
         .isFlagFirstRead = true,
+
+#if USE_CIRCULAR_BUFFER
+        .rxdata_head_index = 0,
+        .rxdata_tail_index = 0,
+        .rxdata_recv_sem = NULL,
+#else
         .rx_queue = NULL,
+#endif
         .rx_task_handle = NULL,
     },
 };
@@ -178,6 +213,25 @@ static void uart_event_handler( void *handler_arg,
         modemUart_p->tx_done = true;
 
     } else if ((event & UART_READ_IRQ_EVENT_TYPE) == UART_READ_IRQ_EVENT_TYPE) {
+
+#if USE_CIRCULAR_BUFFER
+
+        // read 1 byte at a time, no time-out
+        if (cyhal_uart_getc(uart_obj_p,
+                            &modemUart_p->rxdata[modemUart_p->rxdata_head_index],
+                            0) == CY_RSLT_SUCCESS) {
+
+            modemUart_p->rxdata_head_index++;
+            modemUart_p->rxdata_head_index %= CIRCULAR_RX_BUFFER_SIZE;
+
+            // if buffer overrun occurs, assert
+            // then try increasing CIRCULAR_RX_BUFFER_SIZE
+            DEBUG_ASSERT(modemUart_p->rxdata_head_index != modemUart_p->rxdata_tail_index);
+
+            cy_rtos_set_semaphore(&modemUart_p->rxdata_recv_sem, true);
+        }
+
+#else
         /* Data is received in the RX FIFO */
         cy_uart_rx_data_message_t message;
         cy_rslt_t result;
@@ -233,6 +287,7 @@ static void uart_event_handler( void *handler_arg,
                 DEBUG_ASSERT(0);
             }
         }
+#endif
     }
 }
 
@@ -439,8 +494,11 @@ static void uart_read_data_task(cy_thread_arg_t arg)
 {
     Modem_ReadCallback_t *data_p = (Modem_ReadCallback_t*) arg;
     ModemUart_t* modemUart_p;
-    /*size_t*/ uint16_t max_msg_length = 0;
+
+#if (USE_CIRCULAR_BUFFER == 0)
+    uint16_t max_msg_length = 0;
     size_t max_queue_items = 0;
+#endif
 
     CY_LOGD(TAG, "%s [%d]", __FUNCTION__, __LINE__);
     VoidAssert(data_p != NULL);
@@ -452,6 +510,37 @@ static void uart_read_data_task(cy_thread_arg_t arg)
 
     while (true) {
 
+#if USE_CIRCULAR_BUFFER
+        while (cy_rtos_get_semaphore( &modemUart_p->rxdata_recv_sem,
+                                      CY_RTOS_NEVER_TIMEOUT,
+                                      false) != CY_RSLT_SUCCESS) {
+            CY_LOGD(TAG, "%s [%d]: rxdata_recv_sem - timeout! repeat", __FUNCTION__, __LINE__);
+        }
+
+        size_t size = 0;
+        if (modemUart_p->rxdata_head_index > modemUart_p->rxdata_tail_index) {
+            size = modemUart_p->rxdata_head_index - modemUart_p->rxdata_tail_index;
+        }
+        else if (modemUart_p->rxdata_head_index < modemUart_p->rxdata_tail_index) {
+            size = CIRCULAR_RX_BUFFER_SIZE - modemUart_p->rxdata_tail_index;
+        }
+
+        //CY_LOGD(TAG, "%s [%d]: size = %u",
+        //        __FUNCTION__, __LINE__, size);
+
+        if (size > 0) {
+            DEBUG_ASSERT(data_p != NULL);
+            DEBUG_ASSERT(data_p->read_callback != NULL);
+            DEBUG_ASSERT(data_p->read_callback_ctx != NULL);
+
+            data_p->read_callback(&modemUart_p->rxdata[modemUart_p->rxdata_tail_index],
+                                  size,
+                                  data_p->read_callback_ctx);
+
+            modemUart_p->rxdata_tail_index = (modemUart_p->rxdata_tail_index + size) % CIRCULAR_RX_BUFFER_SIZE;
+        }
+
+#else
         cy_uart_rx_data_message_t message;
         while (cy_rtos_get_queue( &modemUart_p->rx_queue,
                                   &message,
@@ -488,8 +577,8 @@ static void uart_read_data_task(cy_thread_arg_t arg)
 #endif
 
             if (data_p != NULL) {
-                /* CY_LOGD(TAG, "%s [%d]: message.length = %u",
-                                 __FUNCTION__, __LINE__, message.length); */
+                //CY_LOGD(TAG, "%s [%d]: message.length = %u",
+                //                 __FUNCTION__, __LINE__, message.length);
 
                 // assume data is PPP data meant for the LWIP stack
                 /* print_bytes("buf: ", message.buf, message.length); */
@@ -506,6 +595,7 @@ static void uart_read_data_task(cy_thread_arg_t arg)
         } else {
             DEBUG_ASSERT(message.length > 0);
         }
+#endif
     }
 }
 
@@ -787,6 +877,17 @@ bool Modem_InstallReadCallback(_in_  Modem_Handle_t handle,
 
     ReturnAssert(handle != INVALID_HANDLE, false);
     ReturnAssert(modemUart_p->magic == MODEM_HANDLE_IDENT, false);
+
+#if USE_CIRCULAR_BUFFER
+    memset(modemUart_p->rxdata, 0, sizeof(modemUart_p->rxdata));
+    modemUart_p->rxdata_head_index = 0;
+    modemUart_p->rxdata_tail_index = 0;
+
+    result = cy_rtos_init_semaphore(&modemUart_p->rxdata_recv_sem, 1, 0);
+    ReturnAssert(result == CY_RSLT_SUCCESS, false);
+    ReturnAssert(modemUart_p->rxdata_recv_sem != NULL, false);
+
+#else
     ReturnAssert(modemUart_p->rx_queue == NULL, false);
 
     result = cy_rtos_init_queue(&modemUart_p->rx_queue,
@@ -794,6 +895,7 @@ bool Modem_InstallReadCallback(_in_  Modem_Handle_t handle,
                                 sizeof(cy_uart_rx_data_message_t));
     ReturnAssert(result == CY_RSLT_SUCCESS, false);
     ReturnAssert(modemUart_p->rx_queue != NULL, false);
+#endif
 
     result = cy_rtos_create_thread( &modemUart_p->rx_task_handle,
                                     uart_read_data_task,
@@ -830,10 +932,18 @@ void Modem_DeleteReadCallback(_in_  Modem_Handle_t handle)
         modemUart_p->rx_task_handle = NULL;
     }
 
+#if (USE_CIRCULAR_BUFFER)
+    if (modemUart_p->rxdata_recv_sem != NULL) {
+        cy_rtos_deinit_semaphore(&modemUart_p->rxdata_recv_sem);
+        modemUart_p->rxdata_recv_sem = NULL;
+    }
+
+#else
     if (modemUart_p->rx_queue != NULL) {
         cy_rtos_deinit_queue(&modemUart_p->rx_queue);
         modemUart_p->rx_queue = NULL;
     }
+#endif
 }
 
 

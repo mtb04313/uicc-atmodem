@@ -100,7 +100,7 @@
 #define MAX_QUERY_OPERATOR_SELECTION_RETRIES    100
 #define QUERY_OPERATOR_SELECTION_INTERVAL_MSEC  1000
 
-#define MAX_QUERY_NETWORK_REGISTRATION_RETRIES      200
+#define MAX_QUERY_NETWORK_REGISTRATION_RETRIES      100
 #define QUERY_NETWORK_REGISTRATION_INTERVAL_MSEC    3000
 
 #define MAX_QUERY_PACKET_DOMAIN_RETRIES     100
@@ -110,6 +110,9 @@
 #define MAX_QUERY_SIGNAL_QUALITY_RETRIES    100
 #define QUERY_SIGNAL_QUALITY_INTERVAL_MSEC  1000
 #define SIGNAL_QUALITY_RSSI_UNKNOWN         99
+
+#define MAX_SET_MAX_BAUD_RATE_RETRIES       3
+#define SET_MAX_BAUD_RATE_INTERVAL_MSEC     1000
 
 #define NETWORK_REGISTRATION_STATUS_NOT_REG_NOT_TRYING    0
 #define NETWORK_REGISTRATION_STATUS_REG_HOME              1
@@ -615,30 +618,39 @@ static bool modem_set_max_baud_rate(cy_modem_t *modem_p,
                                     uint32_t baudrate)
 {
     bool result = false;
+    int i;
+
     ReturnAssert(modem_p != NULL, false);
     CY_LOGD(TAG, "%s [%d]: baudrate = %lu",
             __FUNCTION__, __LINE__, baudrate);
 
-    SNPRINTF( modem_p->line_buffer_p,
-              modem_p->line_buffer_size,
-              AT_CMD_SET_BAUD_RATE "=%lu\r",
-              baudrate);
+    for (i = 0; i < MAX_SET_MAX_BAUD_RATE_RETRIES; i++) {
 
-    if (Modem_SendATCommand(modem_p->handle,
-                            modem_p->line_buffer_p, /* cmd */
-                            modem_p->line_buffer_p, /* response */
-                            modem_p->line_buffer_size)) {
+        SNPRINTF( modem_p->line_buffer_p,
+                  modem_p->line_buffer_size,
+                  AT_CMD_SET_BAUD_RATE "=%lu\r",
+                  baudrate);
 
-        if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
-            CY_LOGE(TAG, "%s [%d]: pdp context failed", __FUNCTION__, __LINE__);
-        } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-            //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
-            result = true;
+        if (Modem_SendATCommand(modem_p->handle,
+                                modem_p->line_buffer_p, /* cmd */
+                                modem_p->line_buffer_p, /* response */
+                                modem_p->line_buffer_size)) {
+
+            if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                CY_LOGE(TAG, "%s [%d]: set max baud rate failed", __FUNCTION__, __LINE__);
+            } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                result = true;
+            }
         }
-    }
 
-    if (result) {
-        result = (bool)Modem_SetBaudRate(modem_p->handle, baudrate);
+        if (result) {
+            result = (bool)Modem_SetBaudRate(modem_p->handle, baudrate);
+            break;
+        }
+        else {
+            cy_rtos_delay_milliseconds(SET_MAX_BAUD_RATE_INTERVAL_MSEC);
+        }
     }
 
     return result;
@@ -901,8 +913,7 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
                 }
             }
 
-#if 0       // Quectel BG96 test code
-
+#ifdef AT_CMD_SET_QCFG_BAND
             // set QCFG
             if (Modem_SendATCommand(modem_p->handle,
                                     AT_CMD_SET_QCFG_BAND,
@@ -915,7 +926,9 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
                     //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                 }
             }
+#endif
 
+#ifdef AT_CMD_SET_QCFG_IOTOPMODE
             if (Modem_SendATCommand(modem_p->handle,
                                     AT_CMD_SET_QCFG_IOTOPMODE,
                                     modem_p->line_buffer_p,
@@ -927,7 +940,9 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
                     //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                 }
             }
+#endif
 
+#ifdef AT_CMD_SET_QCFG_NWSCANSEQ
             if (Modem_SendATCommand(modem_p->handle,
                                     AT_CMD_SET_QCFG_NWSCANSEQ,
                                     modem_p->line_buffer_p,
@@ -939,7 +954,9 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
                     //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                 }
             }
+#endif
 
+#ifdef AT_CMD_SET_QCFG_NWSCANMODE
             if (Modem_SendATCommand(modem_p->handle,
                                     AT_CMD_SET_QCFG_NWSCANMODE,
                                     modem_p->line_buffer_p,
@@ -948,6 +965,24 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
                     CY_LOGE(TAG, "%s [%d]: Error: QCFG nwscanmode", __FUNCTION__, __LINE__);
                     break;
                 } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                    //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                }
+            }
+#endif
+
+#ifdef AT_CMD_ENABLE_BIP
+            // Enable Bearer Independent Protocol (BIP)
+            if (Modem_SendATCommand(modem_p->handle,
+                                    AT_CMD_ENABLE_BIP,
+                                    modem_p->line_buffer_p,
+                                    modem_p->line_buffer_size)) {
+                if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                    CY_LOGE(TAG, "%s [%d]: Error enabling BIP", __FUNCTION__, __LINE__);
+
+                    // continue even if we fail here
+                    //break;
+
+                } else {
                     //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                 }
             }
@@ -985,6 +1020,19 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
                                     modem_p->line_buffer_size)) {
                 if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
                     CY_LOGE(TAG, "%s [%d]: Error reading: IMSI", __FUNCTION__, __LINE__);
+                    break;
+                } else {
+                    //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                }
+            }
+
+            // ICCID
+            if (Modem_SendATCommand(modem_p->handle,
+                                    AT_CMD_ICCID,
+                                    modem_p->line_buffer_p,
+                                    modem_p->line_buffer_size)) {
+                if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                    CY_LOGE(TAG, "%s [%d]: Error reading: ICCID", __FUNCTION__, __LINE__);
                     break;
                 } else {
                     //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
@@ -1272,6 +1320,110 @@ bool modem_start_ppp(cy_modem_t *modem_p,
             }
         }
 
+        // modem version
+        if (Modem_SendATCommand(modem_p->handle,
+                                AT_CMD_VERSION,
+                                modem_p->line_buffer_p,
+                                modem_p->line_buffer_size)) {
+
+            if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                CY_LOGE(TAG, "%s [%d]: Error reading: Version", __FUNCTION__, __LINE__);
+                break;
+
+            } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+            }
+        }
+
+#ifdef AT_CMD_ENABLE_STK
+        // enable SIM toolkit
+        if (Modem_SendATCommand(modem_p->handle,
+                                AT_CMD_ENABLE_STK,
+                                modem_p->line_buffer_p,
+                                modem_p->line_buffer_size)) {
+
+            if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                CY_LOGE(TAG, "%s [%d]: Error enabling SIM toolkix", __FUNCTION__, __LINE__);
+
+                // continue even if we fail here
+                //break;
+
+            } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+            }
+        }
+#endif
+
+#ifdef AT_CMD_IDENT_0
+        // modem identity 0
+        if (Modem_SendATCommand(modem_p->handle,
+                                AT_CMD_IDENT_0,
+                                modem_p->line_buffer_p,
+                                modem_p->line_buffer_size)) {
+
+            if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                CY_LOGE(TAG, "%s [%d]: Error reading: Identity0", __FUNCTION__, __LINE__);
+
+                // continue even if we fail here
+                //break;
+
+            } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+            }
+        }
+#endif
+
+#ifdef AT_CMD_IDENT_6
+        // modem identity 6
+        if (Modem_SendATCommand(modem_p->handle,
+                                AT_CMD_IDENT_6,
+                                modem_p->line_buffer_p,
+                                modem_p->line_buffer_size)) {
+
+            if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                CY_LOGE(TAG, "%s [%d]: Error reading: Identity6", __FUNCTION__, __LINE__);
+
+                // continue even if we fail here
+                //break;
+
+            } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+            }
+        }
+#endif
+
+#ifdef AT_CMD_IDENT_9
+        // modem identity 9
+        if (Modem_SendATCommand(modem_p->handle,
+                                AT_CMD_IDENT_9,
+                                modem_p->line_buffer_p,
+                                modem_p->line_buffer_size)) {
+
+            if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                CY_LOGE(TAG, "%s [%d]: Error reading: Identity9", __FUNCTION__, __LINE__);
+                //break;
+
+            } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+            }
+        }
+#endif
+
+        // modem capabilities
+        if (Modem_SendATCommand(modem_p->handle,
+                                AT_CMD_CAPABILITIES,
+                                modem_p->line_buffer_p,
+                                modem_p->line_buffer_size)) {
+
+            if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                CY_LOGE(TAG, "%s [%d]: Error reading: Capabilities", __FUNCTION__, __LINE__);
+                //break;
+
+            } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+            }
+        }
+
 #ifdef AT_CMD_OPERATOR_SELECTION
         // cellular operator name
         bool operatorSelectionError = true;
@@ -1306,7 +1458,9 @@ bool modem_start_ppp(cy_modem_t *modem_p,
 
         if (operatorSelectionError) {
             CY_LOGE(TAG, "%s [%d]: Operator Selection Error", __FUNCTION__, __LINE__);
-            break;
+
+            // continue even if we fail here
+            //break;
         }
 
         if (Modem_SendATCommand(modem_p->handle,
@@ -1442,7 +1596,9 @@ bool modem_start_ppp(cy_modem_t *modem_p,
 
                 if (networkRegistrationError) {
                     CY_LOGE(TAG, "%s [%d]: Network Registration Error", __FUNCTION__, __LINE__);
-                    break;
+
+                    // continue even if we fail here
+                    //break;
                 }
             }
         }
@@ -1628,6 +1784,35 @@ bool modem_start_ppp(cy_modem_t *modem_p,
         }
 #endif
 
+        // Set Phone Functionality (Full)
+        if (Modem_SendATCommand(modem_p->handle,
+                                AT_CMD_SET_PHONE_FUNCTIONALITY_FULL,
+                                modem_p->line_buffer_p,
+                                modem_p->line_buffer_size)) {
+            if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                CY_LOGE(TAG, "%s [%d]: Error set phone functionality: Full", __FUNCTION__, __LINE__);
+                break;
+
+            } else {
+                //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+            }
+        }
+
+        // Get Phone Functionality
+        if (Modem_SendATCommand(modem_p->handle,
+                                AT_CMD_GET_PHONE_FUNCTIONALITY,
+                                modem_p->line_buffer_p,
+                                modem_p->line_buffer_size)) {
+            if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                CY_LOGE(TAG, "%s [%d]: Error get phone functionality", __FUNCTION__, __LINE__);
+                break;
+
+            } else {
+                //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+            }
+        }
+
+#ifdef AT_CMD_TEST_PDP_CONTEXT
         /* Set PDP Context (APN) */
         if (Modem_SendATCommand(modem_p->handle,
                                 AT_CMD_TEST_PDP_CONTEXT,
@@ -1637,6 +1822,7 @@ bool modem_start_ppp(cy_modem_t *modem_p,
             if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
                 // command is supported
                 //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+#endif
 
                 if (strlen(apn_p) > 0) {
                     SNPRINTF( modem_p->line_buffer_p,
@@ -1660,15 +1846,34 @@ bool modem_start_ppp(cy_modem_t *modem_p,
 
                     if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
                         CY_LOGE(TAG, "%s [%d]: pdp context failed", __FUNCTION__, __LINE__);
-                        // ignore error // break;
+
+                        // continue even if we fail here
+                        //break;
 
                     } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
                         //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                     }
                 }
+#ifdef AT_CMD_TEST_PDP_CONTEXT
             }
         }
+#endif
 
+#ifdef AT_CMD_ACTIVATE_PDP_CONTEXT
+        // Activate PDP context
+        if (Modem_SendATCommand(modem_p->handle,
+                                AT_CMD_ACTIVATE_PDP_CONTEXT,
+                                modem_p->line_buffer_p,
+                                modem_p->line_buffer_size)) {
+            if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                CY_LOGE(TAG, "%s [%d]: Error activating PDP context", __FUNCTION__, __LINE__);
+                break;
+
+            } else {
+                //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+            }
+        }
+#endif
         // show pdp address
         if (Modem_SendATCommand(modem_p->handle,
                                 AT_CMD_TEST_PDP_ADDRESS,
@@ -1686,7 +1891,9 @@ bool modem_start_ppp(cy_modem_t *modem_p,
 
                     if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
                         CY_LOGE(TAG, "%s [%d]: Error: show PDP address", __FUNCTION__, __LINE__);
-                        // ignore error // break;
+
+                        // continue even if we fail here
+                        //break;
 
                     } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
                         //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
