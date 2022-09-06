@@ -40,6 +40,11 @@
 * so agrees to indemnify Cypress against all liability.
 *******************************************************************************/
 
+/**
+ * \file cy_uicc_modem.c
+ * \brief Implementation of UICC modem.
+*/
+
 #include <ctype.h>
 #include <stdlib.h>
 
@@ -55,16 +60,28 @@
 
 /*-- Local Definitions -------------------------------------------------*/
 
+/** \brief Flush read timeout value in milliseconds. */
 #define FLUSH_READ_TIMEOUT_MSEC       10
+
+/** \brief Read timeout value between packets in milliseconds. */
 #define INTER_WORD_READ_TIMEOUT_MSEC  3000
 
+/** \brief Port name prefix string. */
 #define PORT_NAME_PREFIX        ""
+
+/** \brief Maximum length of the modem AT response, in characters. */
 #define MAX_AT_RESP_LEN         256
 
-#define MAX_BUF_LEN             600
-#define RSP_DATA_SIZE           600
-
+/** \brief Compile flag to determine whether to send APDU command in parts.
+*          Use 1 to enable, 0 to disable. */
 #define SEND_COMMAND_IN_PARTS   0 // was 1
+
+#if (SEND_COMMAND_IN_PARTS == 0)
+/** \brief Denotes maximum buffer length. */
+#define MAX_BUF_LEN             600
+#endif
+
+/** \brief Denotes default modem model. */
 #define DEFAULT_MODEM           "Default Modem"
 
 
@@ -158,14 +175,17 @@ static void ExtractResponse(_inout_ uint8_t *responseBuf_p,
     }
 }
 
+/** \brief Maximum number of read tries. */
+#define RECEIVE_MAX_TRIES       2
+
+/** \brief Delay period in millisec between read tries. */
+#define RECEIVE_WAIT_DURATION_MSEC   50
+
 static bool Receive(Modem_Handle_t handle,
                     uint8_t *responseBuf_p,
                     size_t maxResponseBufSize,
                     size_t *numResponseBytes_p)
 {
-#define RECEIVE_MAX_TRIES       2
-#define RECEIVE_WAIT_DURATION   50  // ms
-
     size_t tries = RECEIVE_MAX_TRIES;    // timeOut = tries x waitDuration
     size_t numBytesRead;
 
@@ -179,7 +199,7 @@ static bool Receive(Modem_Handle_t handle,
             //DEBUG_PRINT(("%s [%d]: %s\n", __FUNCTION__, __LINE__, (char*)responseBuf_p));
             break;
         } else {
-            cy_rtos_delay_milliseconds(RECEIVE_WAIT_DURATION);
+            cy_rtos_delay_milliseconds(RECEIVE_WAIT_DURATION_MSEC);
         }
         tries--;
     }
@@ -188,10 +208,9 @@ static bool Receive(Modem_Handle_t handle,
 
     *numResponseBytes_p = numBytesRead;
     return (tries != 0);
-
-#undef RECEIVE_WAIT_DURATION
-#undef RECEIVE_MAX_TRIES
 }
+#undef RECEIVE_WAIT_DURATION_MSEC
+#undef RECEIVE_MAX_TRIES
 
 static bool ReceiveAll( Modem_Handle_t handle,
                         uint8_t *responseBuf_p,
@@ -287,18 +306,25 @@ static bool SendByteArrayAsString(_in_ Modem_Handle_t handle,
 
 /*-- Public Functions -------------------------------------------------*/
 
+/** \brief Maximum number of read tries after sending APDU. */
+#define SEND_RECEIVE_MAX_TRIES       3
+
+/** \brief Delay period in millisec between read tries. */
+#define SEND_RECEIVE_WAIT_DURATION_MSEC   50
+
+/** \brief Length of "AT+CSIM=%u" prefix part in command. */
+#define AT_CSIM_CMD_PADDED_LEN  16
+
+/** \brief Length of "+CSIM,N" prefix part in response. */
+#define AT_CSIM_RESP_PADDED_LEN 10
+
+
 UICC_Result_t Modem_SendApduCommandHelper(_in_ Modem_Handle_t handle,
         _in_ const uint8_t *commandBuf_p,
         _in_ size_t commandBufSize,
         _out_ uint8_t *responseBuf_p,
         _out_ size_t *responseBufSize_p)
 {
-#define RECEIVE_MAX_TRIES       2
-#define RECEIVE_WAIT_DURATION   50  // ms
-
-#define AT_CSIM_CMD_PADDED_LEN  16
-#define AT_CSIM_RESP_PADDED_LEN 10
-
     bool returnValue;
 
 #if (SEND_COMMAND_IN_PARTS == 1)
@@ -308,7 +334,7 @@ UICC_Result_t Modem_SendApduCommandHelper(_in_ Modem_Handle_t handle,
     char strBuffer[MAX_BUF_LEN + AT_CSIM_CMD_PADDED_LEN];
 #endif
 
-    size_t retries = RECEIVE_MAX_TRIES;
+    size_t retries = SEND_RECEIVE_MAX_TRIES;
     const char expectedResponse[] = AT_RSP_CSIM;
 
     ReturnAssert(handle != INVALID_HANDLE, UICC_ARGUMENT_ERROR);
@@ -478,20 +504,26 @@ UICC_Result_t Modem_SendApduCommandHelper(_in_ Modem_Handle_t handle,
 
             return UICC_NO_ERROR;
         } else {
-            cy_rtos_delay_milliseconds(RECEIVE_WAIT_DURATION);
+            cy_rtos_delay_milliseconds(SEND_RECEIVE_WAIT_DURATION_MSEC);
         }
 
         retries--;
     }
 
     return UICC_UNDEFINED_ERROR;
-
-#undef RECEIVE_WAIT_DURATION
-#undef RECEIVE_MAX_TRIES
+}
+#undef SEND_RECEIVE_WAIT_DURATION_MSEC
+#undef SEND_RECEIVE_MAX_TRIES
 #undef AT_CSIM_PADDED_LEN
 #undef AT_CSIM_RESP_PADDED_LEN
-}
 
+
+/** \brief Maximum number of init tries. */
+#define MAX_INIT_TRIES    1
+
+/** \brief Compile flag to determine whether to read IMEI. Use 1 to
+           enable, 0 to disable. */
+#define READ_IMEI         0
 
 int Modem_Init( _in_  Modem_Handle_t handle,
                 _out_ char *modelName_p,
@@ -499,19 +531,17 @@ int Modem_Init( _in_  Modem_Handle_t handle,
                 _out_ char *imei_p,
                 _in_  size_t imeiBufSize)
 {
-#define MAX_INIT_TRIES    1
-#define READ_IMEI         0 /* 1:enable; 0=disable */
-
     int tries;        /* Number of tries so far */
 
     DEBUG_PRINT(("%s [%d]\n", __FUNCTION__, __LINE__));
 
     for (tries = 0; tries < MAX_INIT_TRIES; tries++) {
+        char echoBuffer[20] = "";
 
         if (Modem_SendATCommand(handle,
                                 AT_CMD_ECHO_OFF,
-                                NULL,
-                                0)) {
+                                echoBuffer,
+                                sizeof(echoBuffer))) {
         }
 
         if (Modem_SendATCommand(handle,
@@ -558,6 +588,8 @@ int Modem_Init( _in_  Modem_Handle_t handle,
 
     return RESULT_MODEM_ABSENT;
 }
+#undef MAX_INIT_TRIES
+#undef READ_IMEI
 
 
 bool Modem_IsFound(
@@ -583,14 +615,15 @@ bool Modem_IsFound(
 }
 
 
+/** \brief Maximum number of probe retries. */
+#define MAX_PROBE_RETRIES   1
+
 int Modem_Probe(_in_  const char *portName_p,
                 _out_ char *modelName_p,
                 _in_  size_t modelNameBufSize,
                 _out_ char *imei_p,
                 _in_  size_t imeiBufSize)
 {
-#define MAX_RETRIES   1
-
     int result = RESULT_MODEM_ABSENT;
     size_t tries = 0;
 
@@ -616,7 +649,7 @@ int Modem_Probe(_in_  const char *portName_p,
             Modem_Close(handle);
 
             if ((result != RESULT_MODEM_RETRY) ||
-                    (tries >= MAX_RETRIES)) {
+                    (tries >= MAX_PROBE_RETRIES)) {
                 break;
             }
         } else {
@@ -629,10 +662,8 @@ int Modem_Probe(_in_  const char *portName_p,
     }
 
     return result;
-
-#undef MAX_RETRIES
 }
-
+#undef MAX_PROBE_RETRIES
 
 void Modem_MakePortName(_in_  const char* rawName_p,
                         _in_  size_t rawNameLen,
@@ -717,14 +748,22 @@ void Modem_FreeModemList(_in_ Modem_List_t *listModems_p)
     CY_MEMTRACK_FREE(listModems_p);
 }
 
+/** \brief Compile flag to determine whether to use a temporary response buffer.
+*          Use 1 to enable, 0 to disable. */
+#define USE_TEMP_RESPONSE_BUFFER     0
+
+/** \brief Minimum size of response buffer. */
+#define MIN_RESPONSE_BUF_SIZE       21
+
+#if (USE_TEMP_RESPONSE_BUFFER == 1)
+/** \brief Denotes maximum response data length. */
+#define RSP_DATA_SIZE         600
+#endif
 
 UICC_Result_t Modem_SimTransReceive(_in_ Modem_Handle_t handle,
                                     _in_ const UICC_Buffer_t *PpsCommand,
                                     _out_ UICC_Buffer_t *PpsResponse)
 {
-#define USE_TEMP_RESPONSE_BUFFER     0
-#define MIN_RESPONSE_BUF_SIZE       21
-
     UICC_Result_t retStatus = UICC_UNDEFINED_ERROR;
 
     size_t ui4RspLength;
@@ -871,10 +910,10 @@ UICC_Result_t Modem_SimTransReceive(_in_ Modem_Handle_t handle,
     } while(false);
 
     return retStatus;
-
+}
 #undef USE_TEMP_RESPONSE_BUFFER
 #undef MIN_RESPONSE_BUF_SIZE
-}
+#undef RSP_DATA_SIZE
 
 void Modem_Reset(_in_ Modem_Handle_t handle)
 {
@@ -921,6 +960,9 @@ static size_t GetATCmdLength(_in_  const char *commandString)
     return nCmdChars;
 }
 
+/** \brief Delay period in millisec after sending AT command. Only needed for Fibocom L830-EB*/
+#define AT_COMMAND_WAIT_DURATION_MSEC   0 // was 100
+
 bool Modem_SendATCommand( _in_  Modem_Handle_t handle,
                           _in_  const char *commandString,
                           _out_ char *responseStr_p,
@@ -939,6 +981,9 @@ bool Modem_SendATCommand( _in_  Modem_Handle_t handle,
     if (retValue) {
         size_t temp;
 
+        if (AT_COMMAND_WAIT_DURATION_MSEC > 0) {
+            cy_rtos_delay_milliseconds(AT_COMMAND_WAIT_DURATION_MSEC);
+        }
         memset(buffer, 0, sizeof(buffer));
 
         /* read characters into response buffer until we get a CR or NL */
@@ -947,10 +992,13 @@ bool Modem_SendATCommand( _in_  Modem_Handle_t handle,
                                           (uint8_t*)&buffer[nbytes],
                                           sizeof(buffer) - nbytes)) > 0) {
             //DEBUG_PRINT(("%s [%d]: temp=%d\n", __FUNCTION__, __LINE__, temp));
+            //print_bytes("temp: ", (uint8_t*)&buffer[nbytes], temp);
 
             nbytes += temp;
 
-            if (buffer[nbytes - 1] == '\r' || buffer[nbytes - 1] == '\n') {
+            if ((buffer[nbytes - 1] == '\0') ||
+                (buffer[nbytes - 1] == '\r') ||
+                (buffer[nbytes - 1] == '\n')) {
                 /* nul terminate the string and see if we got an OK response */
                 buffer[nbytes - 1] = '\0';
 
@@ -1003,13 +1051,18 @@ bool Modem_SendATCommand( _in_  Modem_Handle_t handle,
 
     return retValue;
 }
+#undef AT_COMMAND_WAIT_DURATION_MSEC
+
+
+/** \brief Maximum number of flush read tries. */
+#define MAX_FLUSH_TRIES     50
+
+/** \brief Size of flush read buffer. */
+#define MAX_FLUSH_BUF_SIZE  20
 
 /* read until there is no more data */
 void Modem_FlushAll(_in_ Modem_Handle_t handle)
 {
-#define MAX_FLUSH_TRIES     50
-#define MAX_FLUSH_BUF_SIZE  20
-
     uint8_t recvBuf[MAX_FLUSH_BUF_SIZE];
     size_t tries = MAX_FLUSH_TRIES;
 
@@ -1033,7 +1086,6 @@ void Modem_FlushAll(_in_ Modem_Handle_t handle)
     }
 
     //DEBUG_PRINT(("%s [%d]: Flush done\n", __FUNCTION__, __LINE__));
-
+}
 #undef MAX_FLUSH_TRIES
 #undef MAX_FLUSH_BUF_SIZE
-}

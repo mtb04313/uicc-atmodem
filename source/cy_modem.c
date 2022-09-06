@@ -100,7 +100,7 @@
 #define MAX_QUERY_OPERATOR_SELECTION_RETRIES    100
 #define QUERY_OPERATOR_SELECTION_INTERVAL_MSEC  1000
 
-#define MAX_QUERY_NETWORK_REGISTRATION_RETRIES      100
+#define MAX_QUERY_NETWORK_REGISTRATION_RETRIES      10
 #define QUERY_NETWORK_REGISTRATION_INTERVAL_MSEC    3000
 
 #define MAX_QUERY_PACKET_DOMAIN_RETRIES     100
@@ -114,13 +114,20 @@
 #define MAX_SET_MAX_BAUD_RATE_RETRIES       3
 #define SET_MAX_BAUD_RATE_INTERVAL_MSEC     1000
 
+#define MAX_SET_PDP_CONTEXT_RETRIES         5
+#define SET_PDP_CONTEXT_INTERVAL_MSEC       3000
+
 #define NETWORK_REGISTRATION_STATUS_NOT_REG_NOT_TRYING    0
 #define NETWORK_REGISTRATION_STATUS_REG_HOME              1
 #define NETWORK_REGISTRATION_STATUS_TRYING                2
 #define NETWORK_REGISTRATION_STATUS_REG_DENIED            3
 #define NETWORK_REGISTRATION_STATUS_UNKNOWN               4
 #define NETWORK_REGISTRATION_STATUS_REG_ROAM              5
+#define NETWORK_REGISTRATION_STATUS_REG_SMS_HOME          6
+#define NETWORK_REGISTRATION_STATUS_REG_SMS_ROAM          7
 #define NETWORK_REGISTRATION_STATUS_EMERGENCY_ONLY        8
+#define NETWORK_REGISTRATION_STATUS_REG_CSFB_HOME         9
+#define NETWORK_REGISTRATION_STATUS_REG_CSFB_ROAM         10
 
 #define RADIO_ACCESS_TECH_GSM               0
 #define RADIO_ACCESS_TECH_GSM_COMPACT       1
@@ -132,6 +139,11 @@
 #define RADIO_ACCESS_TECH_E_UTRAN           7
 #define RADIO_ACCESS_TECH_EC_GSM_IOT        8
 #define RADIO_ACCESS_TECH_E_UTRAN_NB_S1     9
+
+
+// Quectel BG96 - do once so as to enable BIP
+#define READ_BG96_CFG_CMD       0
+#define WRITE_BG96_CFG_CMD      0
 
 
 /*-- Local Data -------------------------------------------------*/
@@ -288,8 +300,20 @@ static const char* str_network_registration_status(int status)
     case NETWORK_REGISTRATION_STATUS_REG_ROAM:
         return "Registered - roaming";
 
+    case NETWORK_REGISTRATION_STATUS_REG_SMS_HOME:
+        return "Registered - SMS only, home network";
+
+    case NETWORK_REGISTRATION_STATUS_REG_SMS_ROAM:
+        return "Registered - SMS only, roaming";
+
     case NETWORK_REGISTRATION_STATUS_EMERGENCY_ONLY:
         return "Attached for emergency bearer services only";
+
+    case NETWORK_REGISTRATION_STATUS_REG_CSFB_HOME:
+        return "Registered - CSFB not preferred, home network";
+
+    case NETWORK_REGISTRATION_STATUS_REG_CSFB_ROAM:
+        return "Registered - CSFB not preferred, roaming";
 
     default:
         break;
@@ -842,23 +866,6 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
                 break;
             }
 
-#if 0   // don't save settings as it may cause modem not to work on another setup,
-        // which doesn't know the new defaults!
-
-            // save user settings
-            if (Modem_SendATCommand(modem_p->handle,
-                    AT_CMD_SAVE_USER_SETTINGS,
-                                    modem_p->line_buffer_p,
-                                    modem_p->line_buffer_size)) {
-                if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
-                    CY_LOGE(TAG, "%s [%d]: Error saving settings", __FUNCTION__, __LINE__);
-                    break;
-                } else {
-                    //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
-                }
-            }
-#endif
-
             // set error msg format: verbose
             if (Modem_SendATCommand(modem_p->handle,
                                     AT_CMD_SET_ERROR_MSG_FORMAT_VERBOSE,
@@ -913,14 +920,30 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
                 }
             }
 
-#ifdef AT_CMD_SET_QCFG_BAND
-            // set QCFG
+#if (READ_BG96_CFG_CMD == 1)
+#define AT_CMD_READ_BG96_CFG_CMD_1      "AT+QNVFR=\"/nv/item_files/modem/uim/gstk/proactive_feature_enable_cfg\"\r"
+#define AT_CMD_READ_BG96_CFG_CMD_2      "AT+QNVR=6253,0\r"
+
+            // set QNVFR
             if (Modem_SendATCommand(modem_p->handle,
-                                    AT_CMD_SET_QCFG_BAND,
+                                    AT_CMD_READ_BG96_CFG_CMD_1,
                                     modem_p->line_buffer_p,
                                     modem_p->line_buffer_size)) {
                 if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
-                    CY_LOGE(TAG, "%s [%d]: Error: QCFG band", __FUNCTION__, __LINE__);
+                    CY_LOGE(TAG, "%s [%d]: Error: QNVFR", __FUNCTION__, __LINE__);
+                    break;
+                } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                    //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                }
+            }
+
+            // set QNVR
+            if (Modem_SendATCommand(modem_p->handle,
+                                    AT_CMD_READ_BG96_CFG_CMD_2,
+                                    modem_p->line_buffer_p,
+                                    modem_p->line_buffer_size)) {
+                if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                    CY_LOGE(TAG, "%s [%d]: Error: QNVR", __FUNCTION__, __LINE__);
                     break;
                 } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
                     //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
@@ -928,61 +951,32 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
             }
 #endif
 
-#ifdef AT_CMD_SET_QCFG_IOTOPMODE
+#if (WRITE_BG96_CFG_CMD == 1)
+#define AT_CMD_WRITE_BG96_CFG_CMD_1     "AT+QNVFW=\"/nv/item_files/modem/uim/gstk/proactive_feature_enable_cfg\",7FFFFF7F\r" //Need to change to 7FFFFF7F
+#define AT_CMD_WRITE_BG96_CFG_CMD_2     "AT+QNVW=6253,0,\"01\"\r"   //Need to change to 01
+
+            // set QNVFW
             if (Modem_SendATCommand(modem_p->handle,
-                                    AT_CMD_SET_QCFG_IOTOPMODE,
+                                    AT_CMD_WRITE_BG96_CFG_CMD_1,
                                     modem_p->line_buffer_p,
                                     modem_p->line_buffer_size)) {
                 if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
-                    CY_LOGE(TAG, "%s [%d]: Error: QCFG iotopmode", __FUNCTION__, __LINE__);
+                    CY_LOGE(TAG, "%s [%d]: Error: QNVFW", __FUNCTION__, __LINE__);
                     break;
                 } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
                     //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                 }
             }
-#endif
 
-#ifdef AT_CMD_SET_QCFG_NWSCANSEQ
+            // set QNVW
             if (Modem_SendATCommand(modem_p->handle,
-                                    AT_CMD_SET_QCFG_NWSCANSEQ,
+                                    AT_CMD_WRITE_BG96_CFG_CMD_2,
                                     modem_p->line_buffer_p,
                                     modem_p->line_buffer_size)) {
                 if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
-                    CY_LOGE(TAG, "%s [%d]: Error: QCFG nwscanseq", __FUNCTION__, __LINE__);
+                    CY_LOGE(TAG, "%s [%d]: Error: QNVW", __FUNCTION__, __LINE__);
                     break;
                 } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                    //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
-                }
-            }
-#endif
-
-#ifdef AT_CMD_SET_QCFG_NWSCANMODE
-            if (Modem_SendATCommand(modem_p->handle,
-                                    AT_CMD_SET_QCFG_NWSCANMODE,
-                                    modem_p->line_buffer_p,
-                                    modem_p->line_buffer_size)) {
-                if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
-                    CY_LOGE(TAG, "%s [%d]: Error: QCFG nwscanmode", __FUNCTION__, __LINE__);
-                    break;
-                } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                    //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
-                }
-            }
-#endif
-
-#ifdef AT_CMD_ENABLE_BIP
-            // Enable Bearer Independent Protocol (BIP)
-            if (Modem_SendATCommand(modem_p->handle,
-                                    AT_CMD_ENABLE_BIP,
-                                    modem_p->line_buffer_p,
-                                    modem_p->line_buffer_size)) {
-                if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
-                    CY_LOGE(TAG, "%s [%d]: Error enabling BIP", __FUNCTION__, __LINE__);
-
-                    // continue even if we fail here
-                    //break;
-
-                } else {
                     //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                 }
             }
@@ -1081,7 +1075,7 @@ bool cy_modem_powerdown(cy_modem_t *modem_p)
     if (modem_p->handle != INVALID_HANDLE) {
         /* Power down module */
         if (Modem_SendATCommand(modem_p->handle,
-                                AT_CMD_POWER_OFF_MODEM "\r",
+                                AT_CMD_POWER_OFF_MODEM,
                                 modem_p->line_buffer_p,
                                 modem_p->line_buffer_size)) {
             if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
@@ -1274,6 +1268,7 @@ bool modem_start_ppp(cy_modem_t *modem_p,
     do {
         bool result;
         int i;
+        bool networkRegistrationError = true;
 
         // modem manufacturer
         if (Modem_SendATCommand(modem_p->handle,
@@ -1479,6 +1474,8 @@ bool modem_start_ppp(cy_modem_t *modem_p,
 #endif
 
 #ifdef AT_CMD_TEST_GSM_NETWORK
+        networkRegistrationError = true;
+
         // GSM network (2G)
         if (Modem_SendATCommand(modem_p->handle,
                                 AT_CMD_TEST_GSM_NETWORK,
@@ -1491,8 +1488,6 @@ bool modem_start_ppp(cy_modem_t *modem_p,
                 // command is supported
                 //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
 
-                bool networkRegistrationError;;
-
                 if (Modem_SendATCommand(modem_p->handle,
                                         AT_CMD_SET_GSM_NETWORK_PRESENTATION,
                                         modem_p->line_buffer_p,
@@ -1500,14 +1495,14 @@ bool modem_start_ppp(cy_modem_t *modem_p,
 
                     if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
                         CY_LOGE(TAG, "%s [%d]: Failed to set GSM network register presentation", __FUNCTION__, __LINE__);
-                        break;
+
+                        // continue even if we fail here
+                        //break;
 
                     } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
                         //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                     }
                 }
-
-                networkRegistrationError = true;
 
                 for (i = 0; i < MAX_QUERY_NETWORK_REGISTRATION_RETRIES; i++) {
                     if (Modem_SendATCommand(modem_p->handle,
@@ -1533,14 +1528,19 @@ bool modem_start_ppp(cy_modem_t *modem_p,
                 }
 
                 if (networkRegistrationError) {
-                    CY_LOGE(TAG, "%s [%d]: Network Registration Error", __FUNCTION__, __LINE__);
-                    break;
+                    CY_LOGE(TAG, "%s [%d]: 2G Network Registration Error", __FUNCTION__, __LINE__);
+
+                    // continue even if we fail here
+                    //break;
                 }
             }
         }
 #endif
 
+
 #ifdef AT_CMD_TEST_GPRS_NETWORK
+        networkRegistrationError = true;
+
         // GPRS network (3G)
         if (Modem_SendATCommand(modem_p->handle,
                                 AT_CMD_TEST_GPRS_NETWORK,
@@ -1553,8 +1553,6 @@ bool modem_start_ppp(cy_modem_t *modem_p,
                 // command is supported
                 //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
 
-                bool networkRegistrationError;;
-
                 if (Modem_SendATCommand(modem_p->handle,
                                         AT_CMD_SET_GPRS_NETWORK_PRESENTATION,
                                         modem_p->line_buffer_p,
@@ -1562,14 +1560,14 @@ bool modem_start_ppp(cy_modem_t *modem_p,
 
                     if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
                         CY_LOGE(TAG, "%s [%d]: Failed to set GSM network register presentation", __FUNCTION__, __LINE__);
-                        break;
+
+                        // continue even if we fail here
+                        //break;
 
                     } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
                         //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                     }
                 }
-
-                networkRegistrationError = true;
 
                 for (i = 0; i < MAX_QUERY_NETWORK_REGISTRATION_RETRIES; i++) {
                     if (Modem_SendATCommand(modem_p->handle,
@@ -1595,7 +1593,7 @@ bool modem_start_ppp(cy_modem_t *modem_p,
                 }
 
                 if (networkRegistrationError) {
-                    CY_LOGE(TAG, "%s [%d]: Network Registration Error", __FUNCTION__, __LINE__);
+                    CY_LOGE(TAG, "%s [%d]: 3G Network Registration Error", __FUNCTION__, __LINE__);
 
                     // continue even if we fail here
                     //break;
@@ -1604,8 +1602,11 @@ bool modem_start_ppp(cy_modem_t *modem_p,
         }
 #endif
 
+
 #ifdef AT_CMD_TEST_EPS_NETWORK
-        // EPS network (LTE)
+        networkRegistrationError = true;
+
+        // EPS network (LTE/4G)
         if (Modem_SendATCommand(modem_p->handle,
                                 AT_CMD_TEST_EPS_NETWORK,
                                 modem_p->line_buffer_p,
@@ -1617,8 +1618,6 @@ bool modem_start_ppp(cy_modem_t *modem_p,
                 // command is supported
                 //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
 
-                bool networkRegistrationError;;
-
                 if (Modem_SendATCommand(modem_p->handle,
                                         AT_CMD_SET_EPS_NETWORK_PRESENTATION,
                                         modem_p->line_buffer_p,
@@ -1626,14 +1625,14 @@ bool modem_start_ppp(cy_modem_t *modem_p,
 
                     if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
                         CY_LOGE(TAG, "%s [%d]: Failed to set EPS network register presentation", __FUNCTION__, __LINE__);
-                        break;
+
+                        // continue even if we fail here
+                        //break;
 
                     } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
                         //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                     }
                 }
-
-                networkRegistrationError = true;
 
                 for (i = 0; i < MAX_QUERY_NETWORK_REGISTRATION_RETRIES; i++) {
                     if (Modem_SendATCommand(modem_p->handle,
@@ -1659,15 +1658,16 @@ bool modem_start_ppp(cy_modem_t *modem_p,
                 }
 
                 if (networkRegistrationError) {
-                    CY_LOGE(TAG, "%s [%d]: Network Registration Error", __FUNCTION__, __LINE__);
-                    break;
+                    CY_LOGE(TAG, "%s [%d]: LTE/4G Network Registration Error", __FUNCTION__, __LINE__);
+
+                    // continue even if we fail here
+                    //break;
                 }
             }
         }
 #endif
 
-#ifdef AT_CMD_TEST_PACKET_DOMAIN
-        // packet domain service (3G)
+        // GPRS packet domain service (3G)
         if (Modem_SendATCommand(modem_p->handle,
                                 AT_CMD_TEST_PACKET_DOMAIN,
                                 modem_p->line_buffer_p,
@@ -1677,7 +1677,7 @@ bool modem_start_ppp(cy_modem_t *modem_p,
                 // command is supported
                 //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
 
-                bool attachmentError;;
+                bool attachmentError = true;
 
                 if (Modem_SendATCommand(modem_p->handle,
                                         AT_CMD_ATTACH_PACKET_DOMAIN,
@@ -1686,14 +1686,14 @@ bool modem_start_ppp(cy_modem_t *modem_p,
 
                     if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
                         CY_LOGE(TAG, "%s [%d]: Failed to attach to packet domain service", __FUNCTION__, __LINE__);
-                        break;
+
+                        // continue even if we fail here
+                        //break;
 
                     } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
                         //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                     }
                 }
-
-                attachmentError = true;
 
                 for (i = 0; i < MAX_QUERY_PACKET_DOMAIN_RETRIES; i++) {
                     if (Modem_SendATCommand(modem_p->handle,
@@ -1719,12 +1719,13 @@ bool modem_start_ppp(cy_modem_t *modem_p,
                 }
 
                 if (attachmentError) {
-                    CY_LOGE(TAG, "%s [%d]: Packet Domain Attachment Error", __FUNCTION__, __LINE__);
-                    break;
+                    CY_LOGE(TAG, "%s [%d]: GPRS Packet Domain Attachment Error", __FUNCTION__, __LINE__);
+
+                    // continue even if we fail here
+                    //break;
                 }
             }
         }
-#endif
 
         // signal quality
         bool signalQualityError = true;
@@ -1824,40 +1825,69 @@ bool modem_start_ppp(cy_modem_t *modem_p,
                 //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
 #endif
 
-                if (strlen(apn_p) > 0) {
-                    SNPRINTF( modem_p->line_buffer_p,
-                              modem_p->line_buffer_size,
-                              AT_CMD_SET_PDP_CONTEXT "=%u,\"%s\",\"%s\"\r",
-                              AT_CMD_PDP_CONTEXT_CID,
-                              AT_CMD_PDP_CONTEXT_TYPE,
-                              apn_p);
-                } else {
-                    SNPRINTF( modem_p->line_buffer_p,
-                              modem_p->line_buffer_size,
-                              AT_CMD_SET_PDP_CONTEXT "=%u,\"%s\",\r",
-                              AT_CMD_PDP_CONTEXT_CID,
-                              AT_CMD_PDP_CONTEXT_TYPE);
-                }
 
-                if (Modem_SendATCommand(modem_p->handle,
-                                        modem_p->line_buffer_p, /* cmd */
-                                        modem_p->line_buffer_p, /* response */
-                                        modem_p->line_buffer_size)) {
+                bool setApnError = true;
 
-                    if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
-                        CY_LOGE(TAG, "%s [%d]: pdp context failed", __FUNCTION__, __LINE__);
+                for (i = 0; i < MAX_SET_PDP_CONTEXT_RETRIES; i++) {
+                    if (Modem_SendATCommand(modem_p->handle,
+                                            "AT+CGDCONT?\r",
+                                            modem_p->line_buffer_p,
+                                            modem_p->line_buffer_size)) {
+                        if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                            CY_LOGE(TAG, "%s [%d]: Error in reading PDP contexts", __FUNCTION__, __LINE__);
 
-                        // continue even if we fail here
-                        //break;
+                            // continue even if we fail here
+                            //break;
 
-                    } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
-                        //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                        } else {
+                            //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                        }
                     }
+
+                    if (strlen(apn_p) > 0) {
+                        SNPRINTF( modem_p->line_buffer_p,
+                                  modem_p->line_buffer_size,
+                                  AT_CMD_SET_PDP_CONTEXT "=%u,\"%s\",\"%s\"\r",
+                                  AT_CMD_PDP_CONTEXT_CID,
+                                  AT_CMD_PDP_CONTEXT_TYPE,
+                                  apn_p);
+                    } else {
+                        SNPRINTF( modem_p->line_buffer_p,
+                                  modem_p->line_buffer_size,
+                                  AT_CMD_SET_PDP_CONTEXT "=%u,\"%s\",\r",
+                                  AT_CMD_PDP_CONTEXT_CID,
+                                  AT_CMD_PDP_CONTEXT_TYPE);
+                    }
+
+                    if (Modem_SendATCommand(modem_p->handle,
+                                            modem_p->line_buffer_p, /* cmd */
+                                            modem_p->line_buffer_p, /* response */
+                                            modem_p->line_buffer_size)) {
+
+                        if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                            CY_LOGE(TAG, "%s [%d]: PDP context failed", __FUNCTION__, __LINE__);
+
+                        } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                            //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                            setApnError = false;
+                            break;
+                        }
+                    }
+                    cy_rtos_delay_milliseconds(SET_PDP_CONTEXT_INTERVAL_MSEC);
                 }
+
+                if (setApnError) {
+                    CY_LOGE(TAG, "%s [%d]: Set PDP context error", __FUNCTION__, __LINE__);
+
+                    // continue even if we fail here
+                    //break;
+                }
+
 #ifdef AT_CMD_TEST_PDP_CONTEXT
             }
         }
 #endif
+
 
 #ifdef AT_CMD_ACTIVATE_PDP_CONTEXT
         // Activate PDP context
@@ -1867,7 +1897,9 @@ bool modem_start_ppp(cy_modem_t *modem_p,
                                 modem_p->line_buffer_size)) {
             if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
                 CY_LOGE(TAG, "%s [%d]: Error activating PDP context", __FUNCTION__, __LINE__);
-                break;
+
+                // continue even if we fail here
+                //break;
 
             } else {
                 //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
@@ -1911,7 +1943,9 @@ bool modem_start_ppp(cy_modem_t *modem_p,
 
             if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
                 CY_LOGE(TAG, "%s [%d]: Error: set connect response format", __FUNCTION__, __LINE__);
-                break;
+
+                // continue even if we fail here
+                //break;
 
             } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
                 //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
@@ -1939,7 +1973,7 @@ bool modem_stop_ppp(cy_modem_t *modem_p)
 
     /* Hang up */
     if (Modem_SendATCommand(modem_p->handle,
-                            AT_CMD_HALT_PPP_DAEMON "\r",
+                            AT_CMD_HALT_PPP_DAEMON,
                             modem_p->line_buffer_p,
                             modem_p->line_buffer_size)) {
         if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {

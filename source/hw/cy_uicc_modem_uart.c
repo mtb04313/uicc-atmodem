@@ -87,16 +87,10 @@
 
 #if USE_CIRCULAR_BUFFER
 #if (MAX_MODEM_BAUD_RATE <= 230400)
-    #define CIRCULAR_RX_BUFFER_SIZE     1024
-
-#elif (MAX_MODEM_BAUD_RATE <= 460800)
-    #define CIRCULAR_RX_BUFFER_SIZE     2048
-
-#elif (MAX_MODEM_BAUD_RATE <= 921600)
-    #define CIRCULAR_RX_BUFFER_SIZE     4096
+    #define CIRCULAR_RX_BUFFER_SIZE     8192 // 4096 failed on MURATA
 
 #else
-    #define CIRCULAR_RX_BUFFER_SIZE     8192
+    #define CIRCULAR_RX_BUFFER_SIZE     16384
 #endif
 
 #else
@@ -224,10 +218,11 @@ static void uart_event_handler( void *handler_arg,
             modemUart_p->rxdata_head_index++;
             modemUart_p->rxdata_head_index %= CIRCULAR_RX_BUFFER_SIZE;
 
-            // if buffer overrun occurs, assert
-            // then try increasing CIRCULAR_RX_BUFFER_SIZE
-            DEBUG_ASSERT(modemUart_p->rxdata_head_index != modemUart_p->rxdata_tail_index);
-
+            if (modemUart_p->rxdata_head_index == modemUart_p->rxdata_tail_index) {
+                // if buffer overrun occurs, assert
+                // then try increasing CIRCULAR_RX_BUFFER_SIZE
+                DEBUG_ASSERT(modemUart_p->rxdata_head_index != modemUart_p->rxdata_tail_index);
+            }
             cy_rtos_set_semaphore(&modemUart_p->rxdata_recv_sem, true);
         }
 
@@ -442,13 +437,15 @@ static int my_uart_write( ModemUart_t *modemUart_p,
 #undef USE_UART_WRITE
 }
 
-
-static int my_uart_read(cyhal_uart_t *uart_obj_p,
-                        uint32_t readTimeoutMsec,
-                        uint8_t *ptr,
-                        int len)
+static size_t my_uart_read( cyhal_uart_t *uart_obj_p,
+                            uint32_t readTimeoutMsec,
+                            uint8_t *ptr,
+                            size_t len)
 {
 #define USE_UART_READ    0
+
+    //CY_LOGD(TAG, "%s [%d] len=%lu ptr=0x%08x", __FUNCTION__, __LINE__, len, ptr);
+    ReturnAssert(ptr != NULL, 0);
 
 #if (USE_UART_READ)
     cy_rslt_t res;
@@ -460,13 +457,13 @@ static int my_uart_read(cyhal_uart_t *uart_obj_p,
                               &rx_length);
 
         if (res == CY_RSLT_SUCCESS) {
-            return (int)rx_length;
+            return rx_length;
         }
     }
     return 0;
 
 #else
-    int nChars = 0;
+    size_t nChars = 0;
     uint32_t timeoutMsec = readTimeoutMsec;
 
     if (ptr != NULL) {
