@@ -63,9 +63,6 @@
 
 #define ONLY_ENUMERATE_ONE_MODEM      0   // (1:one modem only; 0:can have multiple modems)
 
-#define MAX_MODEM_MODEL_LEN           60
-#define MAX_MODEM_IMEI_LEN            16
-
 #define INTER_BYTE_READ_TIMEOUT_MSEC      10
 #define ISR_INTER_BYTE_READ_TIMEOUT_MSEC  1
 

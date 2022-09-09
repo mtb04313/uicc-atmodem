@@ -111,7 +111,7 @@
 #define QUERY_SIGNAL_QUALITY_INTERVAL_MSEC  1000
 #define SIGNAL_QUALITY_RSSI_UNKNOWN         99
 
-#define MAX_SET_MAX_BAUD_RATE_RETRIES       3
+#define MAX_SET_MAX_BAUD_RATE_RETRIES       5
 #define SET_MAX_BAUD_RATE_INTERVAL_MSEC     1000
 
 #define MAX_SET_PDP_CONTEXT_RETRIES         5
@@ -638,25 +638,27 @@ static void modem_power_off(cy_modem_t *modem_p)
     }
 }
 
+#define BAUD_RATE_CMD_BUF_SIZE      80
+
 static bool modem_set_max_baud_rate(cy_modem_t *modem_p,
                                     uint32_t baudrate)
 {
     bool result = false;
     int i;
+    char temp_cmd_buffer[BAUD_RATE_CMD_BUF_SIZE] = "";
 
     ReturnAssert(modem_p != NULL, false);
     CY_LOGD(TAG, "%s [%d]: baudrate = %lu",
             __FUNCTION__, __LINE__, baudrate);
 
+    SNPRINTF( temp_cmd_buffer,
+              sizeof(temp_cmd_buffer),
+              AT_CMD_SET_BAUD_RATE "=%lu\r",
+              baudrate);
+
     for (i = 0; i < MAX_SET_MAX_BAUD_RATE_RETRIES; i++) {
-
-        SNPRINTF( modem_p->line_buffer_p,
-                  modem_p->line_buffer_size,
-                  AT_CMD_SET_BAUD_RATE "=%lu\r",
-                  baudrate);
-
         if (Modem_SendATCommand(modem_p->handle,
-                                modem_p->line_buffer_p, /* cmd */
+                                temp_cmd_buffer,
                                 modem_p->line_buffer_p, /* response */
                                 modem_p->line_buffer_size)) {
 
@@ -679,7 +681,7 @@ static bool modem_set_max_baud_rate(cy_modem_t *modem_p,
 
     return result;
 }
-
+#undef BAUD_RATE_CMD_BUF_SIZE
 
 static bool cy_modem_power_button_init(void)
 {
@@ -1262,6 +1264,8 @@ bool cy_modem_change_mode( cy_modem_t *modem_p,
     return result;
 }
 
+#define PDP_CONTEXT_CMD_BUF_SIZE      80
+
 bool modem_start_ppp(cy_modem_t *modem_p,
                      const char *apn_p)
 {
@@ -1829,8 +1833,10 @@ bool modem_start_ppp(cy_modem_t *modem_p,
                 bool setApnError = true;
 
                 for (i = 0; i < MAX_SET_PDP_CONTEXT_RETRIES; i++) {
+
+
                     if (Modem_SendATCommand(modem_p->handle,
-                                            "AT+CGDCONT?\r",
+                                            AT_CMD_QUERY_PDP_CONTEXT,
                                             modem_p->line_buffer_p,
                                             modem_p->line_buffer_size)) {
                         if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
@@ -1844,23 +1850,25 @@ bool modem_start_ppp(cy_modem_t *modem_p,
                         }
                     }
 
+                    char temp_cmd_buffer[PDP_CONTEXT_CMD_BUF_SIZE] = "";
+
                     if (strlen(apn_p) > 0) {
-                        SNPRINTF( modem_p->line_buffer_p,
-                                  modem_p->line_buffer_size,
+                        SNPRINTF( temp_cmd_buffer,
+                                  sizeof(temp_cmd_buffer),
                                   AT_CMD_SET_PDP_CONTEXT "=%u,\"%s\",\"%s\"\r",
                                   AT_CMD_PDP_CONTEXT_CID,
                                   AT_CMD_PDP_CONTEXT_TYPE,
                                   apn_p);
                     } else {
-                        SNPRINTF( modem_p->line_buffer_p,
-                                  modem_p->line_buffer_size,
+                        SNPRINTF( temp_cmd_buffer,
+                                  sizeof(temp_cmd_buffer),
                                   AT_CMD_SET_PDP_CONTEXT "=%u,\"%s\",\r",
                                   AT_CMD_PDP_CONTEXT_CID,
                                   AT_CMD_PDP_CONTEXT_TYPE);
                     }
 
                     if (Modem_SendATCommand(modem_p->handle,
-                                            modem_p->line_buffer_p, /* cmd */
+                                            temp_cmd_buffer,
                                             modem_p->line_buffer_p, /* response */
                                             modem_p->line_buffer_size)) {
 
@@ -1965,6 +1973,8 @@ bool modem_start_ppp(cy_modem_t *modem_p,
 
     return false;
 }
+#undef PDP_CONTEXT_CMD_BUF_SIZE
+
 
 bool modem_stop_ppp(cy_modem_t *modem_p)
 {

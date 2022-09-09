@@ -937,6 +937,7 @@ void Modem_Reset(_in_ Modem_Handle_t handle)
 #endif
 }
 
+#if 0
 static size_t GetATCmdLength(_in_  const char *commandString)
 {
     /* if the command string is 'echoed' in the response,
@@ -959,6 +960,117 @@ static size_t GetATCmdLength(_in_  const char *commandString)
     nCmdChars = (size_t)(cmdPtr - commandString) + 1;
     return nCmdChars;
 }
+#endif
+
+#if 1
+bool Modem_SendATCommand( _in_  Modem_Handle_t handle,
+                          _in_  const char *commandString,
+                          _out_ char *responseBuf_p,
+                          _in_  size_t maxResponseBufSize)
+{
+    return Modem_SendATCommandEx(
+        handle,
+        commandString,
+        responseBuf_p,
+        maxResponseBufSize,
+        0,
+        INTER_WORD_READ_TIMEOUT_MSEC,
+        true);
+}
+
+bool Modem_SendATCommandEx(_in_  Modem_Handle_t handle,
+                           _in_  const char *commandString,
+                           _out_ char *responseBuf_p,
+                           _in_  size_t maxResponseBufSize,
+                           _in_  size_t waitTimeBeforeReadMsec,
+                           _in_  size_t timeoutReadMsec,
+                           _in_  bool keepOk)
+{
+    bool retValue;
+    size_t nbytes = 0;       /* Number of bytes read */
+    size_t temp;
+    char* ok_pos_p;
+    char* buffer = responseBuf_p;
+
+    DEBUG_PRINT(("%s [%d]: %s\n", __FUNCTION__, __LINE__, commandString));
+    ReturnAssert(commandString != responseBuf_p, false);
+    ReturnAssert(responseBuf_p != NULL, false);
+
+    retValue = Modem_WriteCommand(handle,
+                                  (const uint8_t*)commandString,
+                                  strlen(commandString));
+
+    //ReturnAssert(retValue, false);
+
+    if (retValue) {
+        if (waitTimeBeforeReadMsec > 0) {
+            cy_rtos_delay_milliseconds(waitTimeBeforeReadMsec);
+        }
+
+        /* read characters into response buffer until we get a CR or NL */
+        while ((temp = Modem_ReadResponse(  handle,
+                                            timeoutReadMsec,
+                                            (uint8_t*)&buffer[nbytes],
+                                            maxResponseBufSize - nbytes)) > 0)
+        {
+            //DEBUG_PRINT(("%s [%d]: temp=%d\n", __FUNCTION__, __LINE__, temp));
+            nbytes += temp;
+
+            if (buffer[nbytes - 1] == '\r' || buffer[nbytes - 1] == '\n') {
+                /* nul terminate the string and see if we got an OK response */
+                buffer[nbytes - 1] = '\0';
+
+                //DEBUG_PRINT(("%s [%d]: found CRLF\n", __FUNCTION__, __LINE__));
+                //DEBUG_PRINT(("(%s)\n", buffer));
+                break;
+            }
+        }
+
+        if ((ok_pos_p = strstr(buffer, AT_RSP_START_OK)) != NULL) {
+            /* found OK in response */
+            char* ptr;
+            char* start;
+            int i;
+
+            /* if caller does not want to keep the OK, remove it from the response */
+            if (!keepOk) {
+                *ok_pos_p = '\0';
+            }
+
+            if ((ptr = strstr(buffer, commandString)) == NULL) {
+                start = ptr = buffer;
+            }
+            else {
+                ptr += strlen(commandString);
+                /* skip over leading whitespace */
+                start = ptr = left_trim(ptr);
+            }
+
+            //DEBUG_PRINT(("[%d] %s\n", __LINE__, start));
+
+            /* remove up to 2 pairs of CRLF at the start of the response
+                  and up to 2 pairs of CRLF at the end of the response
+            */
+            for (i = 0; i < 2; i++) {
+                start = remove_crlf(start);
+            }
+
+            DEBUG_PRINT(("%s [%d]: %s\n", __FUNCTION__, __LINE__, start));
+
+            // move the useful part of the response and its null terminator
+            // to the beginning of the buffer
+            memmove(responseBuf_p, start, strlen(start) + 1);
+        }
+        else {
+            DEBUG_PRINT(("%s [%d]: %s\n", __FUNCTION__, __LINE__, buffer));
+        }
+    }
+
+    return retValue;
+}
+
+#else
+// old implementation
 
 /** \brief Delay period in millisec after sending AT command. Only needed for Fibocom L830-EB*/
 #define AT_COMMAND_WAIT_DURATION_MSEC   0 // was 100
@@ -1052,7 +1164,7 @@ bool Modem_SendATCommand( _in_  Modem_Handle_t handle,
     return retValue;
 }
 #undef AT_COMMAND_WAIT_DURATION_MSEC
-
+#endif
 
 /** \brief Maximum number of flush read tries. */
 #define MAX_FLUSH_TRIES     50

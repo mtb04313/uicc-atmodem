@@ -62,7 +62,7 @@ extern "C" {
 
 #define MAX_SERIAL_PORT_NAME_LEN  16
 #define MAX_MODEM_MODEL_LEN       60
-#define MAX_MODEM_IMEI_LEN        16
+#define MAX_MODEM_IMEI_LEN        32 //16
 
 #define DEFAULT_MODEM_SERIAL_PORT "SIM1"
 #define DEFAULT_MODEM_BAUD_RATE   115200
@@ -115,7 +115,6 @@ UICC_Result_t Modem_SimTransReceive(_in_ Modem_Handle_t handle,
                                     _in_ const UICC_Buffer_t *PpsCommand,
                                     _out_ UICC_Buffer_t *PpsResponse);
 
-// REVISIT: whether Modem_Init is still needed
 int Modem_Init( _in_  Modem_Handle_t handle,
                 _out_ char *modelName_p,
                 _in_  size_t modelNameBufSize,
@@ -136,8 +135,16 @@ UICC_Result_t Modem_SendApduCommandHelper(_in_ Modem_Handle_t handle,
 
 bool Modem_SendATCommand( _in_  Modem_Handle_t handle,
                           _in_  const char *commandString,
-                          _out_ char *responseStr_p,
+                          _out_ char *responseBuf_p,
                           _in_  size_t maxResponseBufSize);
+
+bool Modem_SendATCommandEx(_in_  Modem_Handle_t handle,
+                           _in_  const char *commandString,
+                           _out_ char *responseBuf_p,
+                           _in_  size_t maxResponseBufSize,
+                           _in_  size_t waitTimeBeforeReadMsec,
+                           _in_  size_t timeoutReadMsec,
+                           _in_  bool keepOk);
 
 void Modem_FlushAll(_in_ Modem_Handle_t handle);
 
