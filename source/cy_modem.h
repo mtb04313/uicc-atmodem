@@ -55,8 +55,19 @@ extern "C" {
 /*-- Public Definitions -------------------------------------------------*/
 
 #define CY_MODEM_OPERATOR_NAME_MAX_LEN    80
-#define CY_MODEM_GPS_MAX_LEN              80
+//#define CY_MODEM_GPS_MAX_LEN              80
 #define CY_MODEM_UE_SYSTEM_MAX_LEN        80
+#define CY_MODEM_ICCID_MAX_LEN            22
+
+#define SIGNAL_QUALITY_RSSI_UNKNOWN       99
+#define SIGNAL_QUALITY_RSSI_POOR_MIN      0
+#define SIGNAL_QUALITY_RSSI_POOR_MAX      7
+#define SIGNAL_QUALITY_RSSI_NORM_MIN      8
+#define SIGNAL_QUALITY_RSSI_NORM_MAX      15
+#define SIGNAL_QUALITY_RSSI_GOOD_MIN      16
+#define SIGNAL_QUALITY_RSSI_GOOD_MAX      23
+#define SIGNAL_QUALITY_RSSI_BEST_MIN      24
+#define SIGNAL_QUALITY_RSSI_BEST_MAX      31
 
 typedef struct {
     cy_modem_mode_t mode;
@@ -70,9 +81,8 @@ typedef struct {
     void *receive_cb_ctx;
     Modem_ReadCallback_t *read_cb_p;
 
-    char operatorName[CY_MODEM_OPERATOR_NAME_MAX_LEN];
-    char ueSystemInfo[CY_MODEM_UE_SYSTEM_MAX_LEN];
-    //char gpslocation[CY_MODEM_GPS_MAX_LEN];
+    //char operatorName[CY_MODEM_OPERATOR_NAME_MAX_LEN];
+    //char ueSystemInfo[CY_MODEM_UE_SYSTEM_MAX_LEN];
 
 } cy_modem_t;
 
@@ -91,13 +101,15 @@ bool cy_modem_powerup( cy_modem_t *modem_p, bool connect_ppp);
 
 bool cy_modem_powerdown( cy_modem_t *modem_p);
 
-const char* cy_modem_get_operator_name(cy_modem_t *modem_p);
+const char* cy_modem_get_operator_name(void);
 
 bool cy_modem_update_gps_location(cy_modem_t *modem_p);
 
-//const char* cy_modem_get_gps_location(cy_modem_t *modem_p);
+const char* cy_modem_get_ue_system_info(void);
 
-const char* cy_modem_get_ue_system_info(cy_modem_t *modem_p);
+const char* cy_modem_get_iccid(void);
+
+int cy_modem_get_rssi(void);
 
 bool cy_modem_change_mode(cy_modem_t *modem_p,
                           cy_modem_mode_t new_mode);

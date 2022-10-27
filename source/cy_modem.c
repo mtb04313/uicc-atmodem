@@ -66,6 +66,10 @@
 #define MODEM_IO_REF                PPP_MODEM_IO_REF
 #endif
 
+#ifdef PPP_MODEM_RTS
+#define MODEM_RTS                   PPP_MODEM_RTS
+#endif
+
 #define MODEM_POWER_KEY             PPP_MODEM_POWER_KEY
 #define MODEM_POWER_ON              PPP_MODEM_POWER_KEY_ON_LEVEL
 #define MODEM_POWER_OFF             PPP_MODEM_POWER_KEY_OFF_LEVEL
@@ -140,6 +144,11 @@
 #define RADIO_ACCESS_TECH_EC_GSM_IOT        8
 #define RADIO_ACCESS_TECH_E_UTRAN_NB_S1     9
 
+// Modem_SendATCommandEx timeout values
+#define UE_INFO_WAIT_TIME_BEFORE_READ_MSEC  6000
+#define UE_INFO_READ_TIMEOUT_MSEC           10000
+#define ICCID_WAIT_TIME_BEFORE_READ_MSEC    1000
+#define ICCID_READ_TIMEOUT_MSEC             3000
 
 // Quectel BG96 - do once so as to enable BIP
 #define READ_BG96_CFG_CMD       0
@@ -149,8 +158,61 @@
 /*-- Local Data -------------------------------------------------*/
 static const char *TAG = "modem";
 
+static char s_operatorName[CY_MODEM_OPERATOR_NAME_MAX_LEN] = "";
+static char s_ueSystemInfo[CY_MODEM_UE_SYSTEM_MAX_LEN] = "";
+static char s_iccid[CY_MODEM_ICCID_MAX_LEN] = "";
+static int  s_rssi = SIGNAL_QUALITY_RSSI_UNKNOWN;
 
 /*-- Local Functions -------------------------------------------------*/
+
+// e.g.  +ICCID: 8931070422315955905\r\n\r\nOK
+// e.g.   +CCID: 8931070522316030820\r\n\r\nOK
+static bool extract_iccid(const char* input_p,
+                          char *buf_p,
+                          size_t bufSize)
+{
+  ReturnAssert(input_p != NULL, false);
+  ReturnAssert(buf_p != NULL, false);
+
+  char *start_p;
+  char *end_p = NULL;
+
+  //CY_LOGD(TAG, "%s [%d] input_p = %s", __FUNCTION__, __LINE__, input_p);
+
+  // look for colon or space
+  start_p = strchr(input_p, ':');
+  if (start_p == NULL) {
+    start_p = strchr(input_p, ' ');
+  }
+
+  if (start_p != NULL) {
+    // look for \r or \n
+    end_p = strchr(start_p + 1, '\r');
+    if (end_p == NULL) {
+      end_p = strchr(start_p + 1, '\n');
+    }
+  }
+  else {
+    CY_LOGD(TAG, "%s [%d] start_p is NULL", __FUNCTION__, __LINE__);
+  }
+
+  if (end_p != NULL) {
+    *end_p = '\0';
+    start_p++;
+
+    // remove leading space
+    start_p = left_trim(start_p);
+
+    SNPRINTF(buf_p, bufSize, "%s", start_p);
+    CY_LOGD(TAG, "ICCID: %s", buf_p);
+    return (strlen(buf_p) > 0);
+  }
+  else {
+    CY_LOGD(TAG, "%s [%d] end_p is NULL", __FUNCTION__, __LINE__);
+  }
+
+  return false;
+}
 
 // e.g.  +COPS: 0,0,"Singtel Tata",7
 static bool extract_operator_name(const char* input_p,
@@ -460,7 +522,7 @@ static bool parse_attach_packet_domain_response(char *line_buffer_p)
 }
 
 // Warning: line_buffer_p may be altered
-static bool parse_signal_quality_response(char *line_buffer_p)
+static bool parse_signal_quality_response(char *line_buffer_p, int *rssi_p)
 {
     char *comma_p;
     ReturnAssert(line_buffer_p != NULL, false);
@@ -482,6 +544,10 @@ static bool parse_signal_quality_response(char *line_buffer_p)
                 CY_LOGD(TAG, "rssi = %d", rssi);
 
                 if (rssi < SIGNAL_QUALITY_RSSI_UNKNOWN) {
+                    // caller wants the result
+                    if (rssi_p != NULL) {
+                        *rssi_p = rssi;
+                    }
                     return true;
                 }
             }
@@ -697,6 +763,17 @@ static bool cy_modem_power_button_init(void)
     ReturnAssert((result == CY_RSLT_SUCCESS), false);
 #endif
 
+#ifdef MODEM_RTS
+    /* Initialize the GPIO for modem RTS */
+    result = cyhal_gpio_init( MODEM_RTS,  //    ATMODEM_HW_PIN_UART_RTS
+                              CYHAL_GPIO_DIR_OUTPUT,
+                              CYHAL_GPIO_DRIVE_STRONG,
+                              MODEM_POWER_OFF);  // default is low
+
+    ReturnAssert((result == CY_RSLT_SUCCESS), false);
+#endif
+
+
     /* Initialize the GPIO for modem power */
     result = cyhal_gpio_init( MODEM_POWER_KEY,
                               CYHAL_GPIO_DIR_OUTPUT,
@@ -856,7 +933,7 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
                                     modem_p->line_buffer_size)) {
                 if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
                     CY_LOGE(TAG, "%s [%d]: Error: flow control", __FUNCTION__, __LINE__);
-                    break;
+                    // continue upon error //break;
                 } else if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
                     //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                 }
@@ -1023,15 +1100,21 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
             }
 
             // ICCID
-            if (Modem_SendATCommand(modem_p->handle,
-                                    AT_CMD_ICCID,
-                                    modem_p->line_buffer_p,
-                                    modem_p->line_buffer_size)) {
+            if (Modem_SendATCommandEx(modem_p->handle,
+                                      AT_CMD_ICCID,
+                                      modem_p->line_buffer_p,
+                                      modem_p->line_buffer_size,
+                                      ICCID_WAIT_TIME_BEFORE_READ_MSEC,
+                                      ICCID_READ_TIMEOUT_MSEC,
+                                      true)) {
                 if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
                     CY_LOGE(TAG, "%s [%d]: Error reading: ICCID", __FUNCTION__, __LINE__);
                     break;
                 } else {
-                    //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                    // e.g.  +ICCID: 8931070422315955905\r\n\r\nOK
+                    extract_iccid(modem_p->line_buffer_p,
+                                  s_iccid,
+                                  sizeof(s_iccid));
                 }
             }
 
@@ -1094,11 +1177,9 @@ bool cy_modem_powerdown(cy_modem_t *modem_p)
     return true;
 }
 
-
-const char* cy_modem_get_operator_name(cy_modem_t *modem_p)
+const char* cy_modem_get_operator_name(void)
 {
-    ReturnAssert(modem_p != NULL, "");
-    return modem_p->operatorName;
+  return s_operatorName;
 }
 
 #ifdef AT_CMD_GPS_SESSION_START
@@ -1157,7 +1238,7 @@ bool cy_modem_update_gps_location(cy_modem_t *modem_p)
     }
 
     if (result) {
-#if (HAVE_FLASH_EEPROM == 1)
+#if (FEATURE_FLASH_EEPROM == ENABLE_FEATURE)
         CY_LOGD(TAG, "save updated GPS info into eeprom");
         result = flash_eeprom_set_gps_location(location);
 #endif
@@ -1185,10 +1266,19 @@ bool cy_modem_update_gps_location(cy_modem_t *modem_p)
 }
 #endif
 
-const char* cy_modem_get_ue_system_info(cy_modem_t *modem_p)
+const char* cy_modem_get_ue_system_info(void)
 {
-    ReturnAssert(modem_p != NULL, "");
-    return modem_p->ueSystemInfo;
+    return s_ueSystemInfo;
+}
+
+const char* cy_modem_get_iccid(void)
+{
+    return s_iccid;
+}
+
+int cy_modem_get_rssi(void)
+{
+    return s_rssi;
 }
 
 bool cy_modem_change_mode( cy_modem_t *modem_p,
@@ -1443,8 +1533,8 @@ bool modem_start_ppp(cy_modem_t *modem_p,
                     if (strstr(modem_p->line_buffer_p, ",") != NULL) {
                         // e.g.  +COPS: 0,0,"Singtel Tata",7
                         extract_operator_name(modem_p->line_buffer_p,
-                                              modem_p->operatorName,
-                                              sizeof(modem_p->operatorName));
+                                              s_operatorName,
+                                              sizeof(s_operatorName));
 
                         operatorSelectionError = false;
                         break;
@@ -1749,7 +1839,7 @@ bool modem_start_ppp(cy_modem_t *modem_p,
                 }
             }
 
-            if (parse_signal_quality_response(modem_p->line_buffer_p)) {
+            if (parse_signal_quality_response(modem_p->line_buffer_p, &s_rssi)) {
                 signalQualityError = false;
                 break;
             }
@@ -1762,12 +1852,16 @@ bool modem_start_ppp(cy_modem_t *modem_p,
             break;
         }
 
+
 #ifdef AT_CMD_QUERY_UE_INFO
         // UE Info
-        if (Modem_SendATCommand(modem_p->handle,
-                                AT_CMD_QUERY_UE_INFO,
-                                modem_p->line_buffer_p,
-                                modem_p->line_buffer_size)) {
+        if (Modem_SendATCommandEx(modem_p->handle,
+                                  AT_CMD_QUERY_UE_INFO,
+                                  modem_p->line_buffer_p,
+                                  modem_p->line_buffer_size,
+                                  UE_INFO_WAIT_TIME_BEFORE_READ_MSEC,
+                                  UE_INFO_READ_TIMEOUT_MSEC,
+                                  true)) {
             if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
                 CY_LOGE(TAG, "%s [%d]: Error reading: UE Info", __FUNCTION__, __LINE__);
                 break;
@@ -1782,8 +1876,8 @@ bool modem_start_ppp(cy_modem_t *modem_p,
                 } else {
                     // e.g.  +CPSI: LTE,Online,525-01,0x0309,187230312,184,EUTRAN-BAND3,1300,5,5,-1488
                     extract_ue_system_info( modem_p->line_buffer_p,
-                                            modem_p->ueSystemInfo,
-                                            sizeof(modem_p->ueSystemInfo));
+                                            s_ueSystemInfo,
+                                            sizeof(s_ueSystemInfo));
                 }
             }
         }

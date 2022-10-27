@@ -992,9 +992,10 @@ bool Modem_SendATCommandEx(_in_  Modem_Handle_t handle,
     char* ok_pos_p;
     char* buffer = responseBuf_p;
 
-    DEBUG_PRINT(("%s [%d]: %s\n", __FUNCTION__, __LINE__, commandString));
     ReturnAssert(commandString != responseBuf_p, false);
     ReturnAssert(responseBuf_p != NULL, false);
+
+    DEBUG_PRINT(("%s [%d]: %s\n", __FUNCTION__, __LINE__, commandString));
 
     retValue = Modem_WriteCommand(handle,
                                   (const uint8_t*)commandString,

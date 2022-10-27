@@ -342,6 +342,8 @@ static cy_rslt_t my_cy_uart_init( cyhal_uart_t *uart_obj_p,
     cy_rslt_t result = cyhal_uart_init( uart_obj_p,
                                         tx,
                                         rx,
+                                        NC, // added
+                                        NC, // added
                                         NULL,
                                         &uart_config);
 
