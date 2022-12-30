@@ -53,6 +53,9 @@
 
 #include "cyhal.h"
 
+#if (FEATURE_FLASH_EEPROM == ENABLE_FEATURE)
+#include "flash_eeprom.h"
+#endif
 
 /*-- Local Definitions -------------------------------------------------*/
 
