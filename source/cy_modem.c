@@ -1088,7 +1088,7 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
                 CY_LOGE(TAG, "%s [%d]: USIM Card Error", __FUNCTION__, __LINE__);
                 break;
             }
-
+#if 0
             // IMSI number
             if (Modem_SendATCommand(modem_p->handle,
                                     AT_CMD_IMSI,
@@ -1101,7 +1101,7 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
                     //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
                 }
             }
-
+#endif
             // ICCID
             if (Modem_SendATCommandEx(modem_p->handle,
                                       AT_CMD_ICCID,
