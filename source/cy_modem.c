@@ -73,9 +73,15 @@
 #define MODEM_RTS                   PPP_MODEM_RTS
 #endif
 
+#ifdef PPP_MODEM_POWER_KEY
 #define MODEM_POWER_KEY             PPP_MODEM_POWER_KEY
 #define MODEM_POWER_ON              PPP_MODEM_POWER_KEY_ON_LEVEL
 #define MODEM_POWER_OFF             PPP_MODEM_POWER_KEY_OFF_LEVEL
+#else
+#undef MODEM_POWER_KEY
+#undef MODEM_POWER_ON
+#undef MODEM_POWER_OFF
+#endif
 
 #if (PPP_MODEM_POWER_METHOD == PPP_SIMPLE_SWITCH_METHOD)
 #define POWER_OFF_PULSE_WIDTH_MSEC          3000
@@ -626,13 +632,55 @@ static bool wait_for_modem_ready( cy_modem_t *modem_p,
 #if (PPP_MODEM_POWER_METHOD == PPP_POWER_STEP_METHOD)
 static void do_modem_power_on_pulse(void)
 {
+#ifdef MODEM_POWER_KEY
     cyhal_gpio_write(MODEM_POWER_KEY, MODEM_POWER_OFF);
 
     cy_rtos_delay_milliseconds(POWER_ON_PULSE_WIDTH_MSEC);
 
     cyhal_gpio_write(MODEM_POWER_KEY, MODEM_POWER_ON);
+#endif
 }
 #endif
+
+static void modem_disable_wireless(void)
+{
+#ifdef PPP_MODEM_DISABLE_WIRELESS_KEY
+    cyhal_gpio_write(PPP_MODEM_DISABLE_WIRELESS_KEY, PPP_MODEM_KEY_HIGH_LEVEL);
+
+#endif
+}
+
+static void modem_enable_wireless(void)
+{
+#ifdef PPP_MODEM_DISABLE_WIRELESS_KEY
+    cyhal_gpio_write(PPP_MODEM_DISABLE_WIRELESS_KEY, PPP_MODEM_KEY_LOW_LEVEL);
+
+#endif
+}
+
+static bool modem_is_wireless_enabled(void)
+{
+#ifdef PPP_MODEM_DISABLE_WIRELESS_KEY
+    bool value = cyhal_gpio_read(PPP_MODEM_DISABLE_WIRELESS_KEY);
+    if (value == PPP_MODEM_KEY_HIGH_LEVEL) {
+        return false;
+    }
+    return true;
+
+#endif
+    return true;
+}
+
+static void modem_reset(void)
+{
+#ifdef PPP_MODEM_RESET_KEY
+    cyhal_gpio_write(PPP_MODEM_RESET_KEY, PPP_MODEM_KEY_HIGH_LEVEL);
+
+    cy_rtos_delay_milliseconds(PPP_MODEM_RESET_PULSE_WIDTH_MSEC);
+
+    cyhal_gpio_write(PPP_MODEM_RESET_KEY, PPP_MODEM_KEY_LOW_LEVEL);
+#endif
+}
 
 static bool modem_power_on(cy_modem_t *modem_p)
 {
@@ -641,10 +689,11 @@ static bool modem_power_on(cy_modem_t *modem_p)
     if (!modem_p->is_powered_on) {
         CY_LOGD(TAG, "%s", __FUNCTION__);
 
-#if (PPP_MODEM_POWER_METHOD == PPP_SIMPLE_SWITCH_METHOD)
+#ifdef MODEM_POWER_KEY
+  #if (PPP_MODEM_POWER_METHOD == PPP_SIMPLE_SWITCH_METHOD)
         cyhal_gpio_write(MODEM_POWER_KEY, MODEM_POWER_ON);
 
-#elif (PPP_MODEM_POWER_METHOD == PPP_POWER_STEP_METHOD)
+  #elif (PPP_MODEM_POWER_METHOD == PPP_POWER_STEP_METHOD)
         bool value = cyhal_gpio_read(MODEM_POWER_KEY);
         if (value != MODEM_POWER_ON) {
             cyhal_gpio_write(MODEM_POWER_KEY, MODEM_POWER_ON);
@@ -653,7 +702,7 @@ static bool modem_power_on(cy_modem_t *modem_p)
             do_modem_power_on_pulse();
         }
 
-#elif (PPP_MODEM_POWER_METHOD == PPP_PULSE_SWITCH_METHOD)
+  #elif (PPP_MODEM_POWER_METHOD == PPP_PULSE_SWITCH_METHOD)
         cyhal_gpio_write(MODEM_POWER_KEY, MODEM_POWER_ON);
         cy_rtos_delay_milliseconds(POWER_ON_PULSE_WIDTH_MSEC);
 
@@ -661,6 +710,10 @@ static bool modem_power_on(cy_modem_t *modem_p)
         cy_rtos_delay_milliseconds(POWER_ON_PULSE_WIDTH_MSEC);
 
         cyhal_gpio_write(MODEM_POWER_KEY, MODEM_POWER_ON);
+  #endif
+
+#else
+        modem_reset();
 #endif
 
         modem_p->is_powered_on = true;
@@ -678,13 +731,14 @@ static void modem_power_off(cy_modem_t *modem_p)
     if (modem_p->is_powered_on) {
         CY_LOGD(TAG, "%s", __FUNCTION__);
 
-#if ((PPP_MODEM_POWER_METHOD == PPP_SIMPLE_SWITCH_METHOD) || \
+#ifdef MODEM_POWER_KEY
+  #if ((PPP_MODEM_POWER_METHOD == PPP_SIMPLE_SWITCH_METHOD) || \
      (PPP_MODEM_POWER_METHOD == PPP_PULSE_SWITCH_METHOD))
 
         cyhal_gpio_write(MODEM_POWER_KEY, MODEM_POWER_OFF);
         cy_rtos_delay_milliseconds(POWER_OFF_PULSE_WIDTH_MSEC);
 
-#elif (PPP_MODEM_POWER_METHOD == PPP_POWER_STEP_METHOD)
+  #elif (PPP_MODEM_POWER_METHOD == PPP_POWER_STEP_METHOD)
 
         bool value = cyhal_gpio_read(MODEM_POWER_KEY);
         if (value == MODEM_POWER_OFF) {
@@ -701,8 +755,8 @@ static void modem_power_off(cy_modem_t *modem_p)
             cy_rtos_delay_milliseconds(POWER_OFF_PULSE_WIDTH_MSEC);
             cyhal_gpio_write(MODEM_POWER_KEY, MODEM_POWER_OFF);
         }
+  #endif
 #endif
-
         modem_p->is_powered_on = false;
     }
 }
@@ -754,9 +808,10 @@ static bool modem_set_max_baud_rate(cy_modem_t *modem_p,
 
 static bool cy_modem_power_button_init(void)
 {
+#ifdef MODEM_POWER_KEY
     cy_rslt_t result;
 
-#ifdef MODEM_IO_REF
+  #ifdef MODEM_IO_REF
     /* Initialize the GPIO for modem IO REF */
     result = cyhal_gpio_init( MODEM_IO_REF,
                               CYHAL_GPIO_DIR_OUTPUT,
@@ -764,9 +819,9 @@ static bool cy_modem_power_button_init(void)
                               MODEM_POWER_ON);  // default is high
 
     ReturnAssert((result == CY_RSLT_SUCCESS), false);
-#endif
+  #endif
 
-#ifdef MODEM_RTS
+  #ifdef MODEM_RTS
     /* Initialize the GPIO for modem RTS */
     result = cyhal_gpio_init( MODEM_RTS,  //    ATMODEM_HW_PIN_UART_RTS
                               CYHAL_GPIO_DIR_OUTPUT,
@@ -774,7 +829,7 @@ static bool cy_modem_power_button_init(void)
                               MODEM_POWER_OFF);  // default is low
 
     ReturnAssert((result == CY_RSLT_SUCCESS), false);
-#endif
+  #endif
 
 
     /* Initialize the GPIO for modem power */
@@ -784,6 +839,48 @@ static bool cy_modem_power_button_init(void)
                               MODEM_POWER_OFF);
 
     return (result == CY_RSLT_SUCCESS)? true : false;
+
+#else
+    return true;
+#endif
+}
+
+
+static bool cy_modem_reset_button_init(void)
+{
+#ifdef PPP_MODEM_RESET_KEY
+    cy_rslt_t result;
+
+    /* Initialize the GPIO for modem reset */
+    result = cyhal_gpio_init( PPP_MODEM_RESET_KEY,
+                              CYHAL_GPIO_DIR_OUTPUT,
+                              CYHAL_GPIO_DRIVE_STRONG,
+                              PPP_MODEM_KEY_LOW_LEVEL);
+
+    return (result == CY_RSLT_SUCCESS)? true : false;
+
+#else
+    return true;
+#endif
+}
+
+
+static bool cy_modem_disable_wireless_button_init(void)
+{
+#ifdef PPP_MODEM_DISABLE_WIRELESS_KEY
+    cy_rslt_t result;
+
+    /* Initialize the GPIO for modem disable wireless */
+    result = cyhal_gpio_init( PPP_MODEM_DISABLE_WIRELESS_KEY,
+                              CYHAL_GPIO_DIR_BIDIRECTIONAL,
+                              CYHAL_GPIO_DRIVE_PULL_NONE,
+                              PPP_MODEM_KEY_LOW_LEVEL);
+
+    return (result == CY_RSLT_SUCCESS)? true : false;
+
+#else
+    return true;
+#endif
 }
 
 
@@ -858,6 +955,12 @@ bool cy_modem_init(void)
     ReturnAssert(result, result);
 
     result = cy_modem_power_button_init();
+    ReturnAssert(result, result);
+
+    result = cy_modem_reset_button_init();
+    ReturnAssert(result, result);
+
+    result = cy_modem_disable_wireless_button_init();
     ReturnAssert(result, result);
 
     return true;
@@ -2096,3 +2199,24 @@ bool modem_stop_ppp(cy_modem_t *modem_p)
 
     return result;
 }
+
+void cy_modem_reset(void)
+{
+    modem_reset();
+}
+
+void cy_modem_disable_wireless(void)
+{
+    modem_disable_wireless();
+}
+
+void cy_modem_enable_wireless(void)
+{
+    modem_enable_wireless();
+}
+
+bool cy_modem_is_wireless_enabled(void)
+{
+    return modem_is_wireless_enabled();
+}
+

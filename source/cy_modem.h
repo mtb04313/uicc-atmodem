@@ -119,6 +119,14 @@ bool modem_start_ppp(cy_modem_t *modem_p,
 
 bool modem_stop_ppp(cy_modem_t *modem_p);
 
+void cy_modem_reset(void);
+
+void cy_modem_disable_wireless(void);
+
+void cy_modem_enable_wireless(void);
+
+bool cy_modem_is_wireless_enabled(void);
+
 #ifdef __cplusplus
 }
 #endif
