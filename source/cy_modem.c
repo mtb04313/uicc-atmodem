@@ -883,6 +883,94 @@ static bool cy_modem_disable_wireless_button_init(void)
 #endif
 }
 
+static void modem_query_iccid(cy_modem_t *modem_p)
+{
+    VoidAssert(modem_p != NULL);
+
+#ifdef AT_CMD_ICCID
+    if (Modem_SendATCommandEx(modem_p->handle,
+                              AT_CMD_ICCID,
+                              modem_p->line_buffer_p,
+                              modem_p->line_buffer_size,
+                              ICCID_WAIT_TIME_BEFORE_READ_MSEC,
+                              ICCID_READ_TIMEOUT_MSEC,
+                              true)) {
+        if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+            CY_LOGE(TAG, "%s [%d]: Error reading: ICCID", __FUNCTION__, __LINE__);
+            break;
+        } else {
+            // e.g.  +ICCID: 8931070422315955905\r\n\r\nOK
+            extract_iccid(modem_p->line_buffer_p,
+                          s_iccid,
+                          sizeof(s_iccid));
+        }
+    }
+
+#elif defined AT_CMD_ICCID_1
+
+    static const char* iccidCmd[] = {
+            AT_CMD_ICCID_1,
+            AT_CMD_ICCID_2,
+            AT_CMD_ICCID_3,
+            AT_CMD_ICCID_4,
+            AT_CMD_ICCID_5,
+            AT_CMD_ICCID_6,
+    };
+
+    char tempCmd[AT_CMD_ICCID_BUF_LEN];
+    int i;
+
+    for (i = 0; i < sizeof(iccidCmd)/sizeof(iccidCmd[0]); i++) {
+        int j = strlen(iccidCmd[i]);
+
+        // must end with '\r'
+        VoidAssert(iccidCmd[i][j - 1] == '\r');
+        // If "=?" is inserted before the '\r', the result must still fit in buffer
+        VoidAssert((j + 2) < AT_CMD_ICCID_BUF_LEN);
+
+        strcpy(tempCmd, iccidCmd[i]);
+        tempCmd[j - 1] = '\0';  // erase the \r
+
+        // append "=?\r" to form a test string
+        strcat(tempCmd, "=?\r");
+
+        // test whether the command is supported by the modem
+        if (Modem_SendATCommandEx(modem_p->handle,
+                                  tempCmd,
+                                  modem_p->line_buffer_p,
+                                  modem_p->line_buffer_size,
+                                  ICCID_WAIT_TIME_BEFORE_READ_MSEC,
+                                  ICCID_READ_TIMEOUT_MSEC,
+                                  true)) {
+            if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                // command is supported!
+                if (Modem_SendATCommandEx(modem_p->handle,
+                                          iccidCmd[i],
+                                          modem_p->line_buffer_p,
+                                          modem_p->line_buffer_size,
+                                          ICCID_WAIT_TIME_BEFORE_READ_MSEC,
+                                          ICCID_READ_TIMEOUT_MSEC,
+                                          true)) {
+
+                    if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                        CY_LOGE(TAG, "%s [%d]: Error: ICCID", __FUNCTION__, __LINE__);
+
+                    } else {
+                        // e.g.  +ICCID: 8931070422315955905\r\n\r\nOK
+                        extract_iccid(modem_p->line_buffer_p,
+                                      s_iccid,
+                                      sizeof(s_iccid));
+
+                        // end the loop when a command succeeds
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+#endif
+}
 
 /*-- Public Functions -------------------------------------------------*/
 
@@ -1206,23 +1294,7 @@ bool cy_modem_powerup(cy_modem_t *modem_p, bool connect_ppp)
             }
 #endif
             // ICCID
-            if (Modem_SendATCommandEx(modem_p->handle,
-                                      AT_CMD_ICCID,
-                                      modem_p->line_buffer_p,
-                                      modem_p->line_buffer_size,
-                                      ICCID_WAIT_TIME_BEFORE_READ_MSEC,
-                                      ICCID_READ_TIMEOUT_MSEC,
-                                      true)) {
-                if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
-                    CY_LOGE(TAG, "%s [%d]: Error reading: ICCID", __FUNCTION__, __LINE__);
-                    break;
-                } else {
-                    // e.g.  +ICCID: 8931070422315955905\r\n\r\nOK
-                    extract_iccid(modem_p->line_buffer_p,
-                                  s_iccid,
-                                  sizeof(s_iccid));
-                }
-            }
+            modem_query_iccid(modem_p);
 
             //cy_modem_update_gps_location(modem_p);
         }
@@ -1276,6 +1348,60 @@ bool cy_modem_powerdown(cy_modem_t *modem_p)
             }
         }
     }
+
+#elif defined AT_CMD_POWER_OFF_MODEM_1
+
+    static const char* powerOffCmd[] = {
+            AT_CMD_POWER_OFF_MODEM_1,
+            AT_CMD_POWER_OFF_MODEM_2,
+            AT_CMD_POWER_OFF_MODEM_3,
+            AT_CMD_POWER_OFF_MODEM_4,
+            AT_CMD_POWER_OFF_MODEM_5,
+    };
+
+    char tempCmd[AT_CMD_POWER_OFF_MODEM_BUF_LEN];
+    int i;
+
+    for (i = 0; i < sizeof(powerOffCmd)/sizeof(powerOffCmd[0]); i++) {
+        int j = strlen(powerOffCmd[i]);
+
+        // must end with '\r'
+        ReturnAssert(powerOffCmd[i][j - 1] == '\r', false);
+
+        // If "=?" is inserted before the '\r', the result must still fit in buffer
+        ReturnAssert((j + 2) < AT_CMD_POWER_OFF_MODEM_BUF_LEN, false);
+
+        strcpy(tempCmd, powerOffCmd[i]);
+        tempCmd[j - 1] = '\0';  // erase the \r
+
+        // append "=?\r" to form a test string
+        strcat(tempCmd, "=?\r");
+
+        // test whether the command is supported by the modem
+        if (Modem_SendATCommand(  modem_p->handle,
+                                  tempCmd,
+                                  modem_p->line_buffer_p,
+                                  modem_p->line_buffer_size)) {
+
+            if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                // command is supported!
+                if (Modem_SendATCommand(  modem_p->handle,
+                                          powerOffCmd[i],
+                                          modem_p->line_buffer_p,
+                                          modem_p->line_buffer_size)) {
+
+                    if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_ERROR) != NULL) {
+                        CY_LOGE(TAG, "%s [%d]: Error: power down", __FUNCTION__, __LINE__);
+
+                    } else {
+                        // end the loop when a command succeeds
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
 #endif
 
     modem_power_off(modem_p);
@@ -2181,6 +2307,7 @@ bool modem_stop_ppp(cy_modem_t *modem_p)
     bool result;
     result = cy_modem_change_mode(modem_p, CY_MODEM_COMMAND_MODE);
 
+#ifdef AT_CMD_HALT_PPP_DAEMON
     /* Hang up */
     if (Modem_SendATCommand(modem_p->handle,
                             AT_CMD_HALT_PPP_DAEMON,
@@ -2194,6 +2321,39 @@ bool modem_stop_ppp(cy_modem_t *modem_p)
         }
         modem_p->is_data_connected = false;
     }
+
+#elif defined AT_CMD_HALT_PPP_DAEMON_1
+
+    static const char* haltCmd[] = {
+            AT_CMD_HALT_PPP_DAEMON_1,
+            AT_CMD_HALT_PPP_DAEMON_2,
+    };
+
+    int i;
+    for (i = 0; i < sizeof(haltCmd)/sizeof(haltCmd[0]); i++) {
+        int j = strlen(haltCmd[i]);
+
+        // must end with '\r'
+        ReturnAssert(haltCmd[i][j - 1] == '\r', false);
+
+        // send the command and see if succeeds
+        if (Modem_SendATCommand(  modem_p->handle,
+                                  haltCmd[i],
+                                  modem_p->line_buffer_p,
+                                  modem_p->line_buffer_size)) {
+
+            if (strstr(modem_p->line_buffer_p, CY_MODEM_RESULT_OK) != NULL) {
+                //CY_LOGD(TAG, "%s", modem_p->line_buffer_p);
+                result = true;
+
+                // end the loop when a command succeeds
+                break;
+            }
+        }
+    }
+    modem_p->is_data_connected = false;
+
+#endif
 
     result = true; // ignore errors
 
